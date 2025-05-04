@@ -52,11 +52,15 @@ static inline __m512 exp_avx512(__m512 x) {
 
   __m512 frac_exp = _mm512_fmadd_ps(
       frac_part, poly_6,
-      _mm512_fmadd_ps(frac_part, poly_5,
-                      _mm512_fmadd_ps(frac_part, poly_4,
-                                      _mm512_fmadd_ps(frac_part, poly_3, _mm512_fmadd_ps(frac_part, poly_2, poly_1)))));
+      _mm512_fmadd_ps(
+          frac_part, poly_5,
+          _mm512_fmadd_ps(
+              frac_part, poly_4,
+              _mm512_fmadd_ps(frac_part, poly_3,
+                              _mm512_fmadd_ps(frac_part, poly_2, poly_1)))));
 
-  __m512 two_pow_i = _mm512_scalef_ps(_mm512_set1_ps(1.0f), _mm512_cvtepi32_ps(int_part));
+  __m512 two_pow_i =
+      _mm512_scalef_ps(_mm512_set1_ps(1.0f), _mm512_cvtepi32_ps(int_part));
   return _mm512_mul_ps(two_pow_i, frac_exp);
 }
 
@@ -81,29 +85,37 @@ struct AMX_MOEConfig {
 
   AMX_MOEConfig() {}
 
-  AMX_MOEConfig(int expert_num, int routed_expert_num, int hidden_size, int intermediate_size, int max_len,
-                void *gate_proj, void *up_proj, void *down_proj)
-      : expert_num(expert_num), routed_expert_num(routed_expert_num), hidden_size(hidden_size),
-        intermediate_size(intermediate_size), max_len(max_len), gate_proj(gate_proj), up_proj(up_proj),
+  AMX_MOEConfig(int expert_num, int routed_expert_num, int hidden_size,
+                int intermediate_size, int max_len, void *gate_proj,
+                void *up_proj, void *down_proj)
+      : expert_num(expert_num), routed_expert_num(routed_expert_num),
+        hidden_size(hidden_size), intermediate_size(intermediate_size),
+        max_len(max_len), gate_proj(gate_proj), up_proj(up_proj),
         down_proj(down_proj) {}
 };
 
 template <class T> class AMX_MOE {
 private:
   AMX_MOEConfig config_;
-  void *gate_proj_; // [expert_num * intermediate_size * hidden_size ( /32 if quantized)]
-  void *up_proj_;   // [expert_num * intermediate_size * hidden_size ( /32 if quantized)]
-  void *down_proj_; // [expert_num * hidden_size * intermediate_size ( /32 if quantized)]
+  void *gate_proj_; // [expert_num * intermediate_size * hidden_size ( /32 if
+                    // quantized)]
+  void *up_proj_;   // [expert_num * intermediate_size * hidden_size ( /32 if
+                    // quantized)]
+  void *down_proj_; // [expert_num * hidden_size * intermediate_size ( /32 if
+                    // quantized)]
 
-  ggml_bf16_t *m_local_input_;       // [routed_expert_num * max_len * hidden_size]
-  ggml_bf16_t *m_local_gate_output_; // [routed_expert_num * max_len * intermediate_size]
-  ggml_bf16_t *m_local_up_output_;   // [routed_expert_num * max_len * intermediate_size]
-  ggml_bf16_t *m_local_down_output_; // [routed_expert_num * max_len * hidden_size]
+  ggml_bf16_t *m_local_input_; // [routed_expert_num * max_len * hidden_size]
+  ggml_bf16_t *
+      m_local_gate_output_; // [routed_expert_num * max_len * intermediate_size]
+  ggml_bf16_t
+      *m_local_up_output_; // [routed_expert_num * max_len * intermediate_size]
+  ggml_bf16_t
+      *m_local_down_output_; // [routed_expert_num * max_len * hidden_size]
 
-  std::vector<std::vector<int>> m_local_pos_;          // [max_len, routed_expert_num]
-  std::vector<int> m_local_num_;                       // [expert_num]
-  std::vector<int> m_expert_id_map_;                   // [expert_num]
-  std::vector<ggml_bf16_t *> m_local_input_ptr_;       // [expert_num]
+  std::vector<std::vector<int>> m_local_pos_;    // [max_len, routed_expert_num]
+  std::vector<int> m_local_num_;                 // [expert_num]
+  std::vector<int> m_expert_id_map_;             // [expert_num]
+  std::vector<ggml_bf16_t *> m_local_input_ptr_; // [expert_num]
   std::vector<ggml_bf16_t *> m_local_gate_output_ptr_; // [expert_num]
   std::vector<ggml_bf16_t *> m_local_up_output_ptr_;   // [expert_num]
   std::vector<ggml_bf16_t *> m_local_down_output_ptr_; // [expert_num]
@@ -133,13 +145,17 @@ public:
 
     std::vector<std::pair<void **, uint64_t>> m_mem_requests;
     m_mem_requests.push_back({(void **)&m_local_input_,
-                              sizeof(ggml_bf16_t) * config_.routed_expert_num * config_.max_len * config_.hidden_size});
-    m_mem_requests.push_back({(void **)&m_local_gate_output_, sizeof(ggml_bf16_t) * config_.routed_expert_num *
-                                                                  config_.max_len * config_.intermediate_size});
-    m_mem_requests.push_back({(void **)&m_local_up_output_, sizeof(ggml_bf16_t) * config_.routed_expert_num *
-                                                                config_.max_len * config_.intermediate_size});
+                              sizeof(ggml_bf16_t) * config_.routed_expert_num *
+                                  config_.max_len * config_.hidden_size});
+    m_mem_requests.push_back({(void **)&m_local_gate_output_,
+                              sizeof(ggml_bf16_t) * config_.routed_expert_num *
+                                  config_.max_len * config_.intermediate_size});
+    m_mem_requests.push_back({(void **)&m_local_up_output_,
+                              sizeof(ggml_bf16_t) * config_.routed_expert_num *
+                                  config_.max_len * config_.intermediate_size});
     m_mem_requests.push_back({(void **)&m_local_down_output_,
-                              sizeof(ggml_bf16_t) * config_.routed_expert_num * config_.max_len * config_.hidden_size});
+                              sizeof(ggml_bf16_t) * config_.routed_expert_num *
+                                  config_.max_len * config_.hidden_size});
     std::vector<void *> gate_up_ba_ptr(config_.expert_num);
     std::vector<void *> gate_bc_ptr(config_.expert_num);
     std::vector<void *> up_bc_ptr(config_.expert_num);
@@ -147,15 +163,23 @@ public:
     std::vector<void *> down_bc_ptr(config_.expert_num);
     for (int i = 0; i < config_.expert_num; i++) {
       m_mem_requests.push_back(
-          {(void **)&gate_up_ba_ptr[i], T::BufferA::required_size(config_.max_len, config_.hidden_size)});
+          {(void **)&gate_up_ba_ptr[i],
+           T::BufferA::required_size(config_.max_len, config_.hidden_size)});
       m_mem_requests.push_back(
-          {(void **)&gate_bc_ptr[i], T::BufferC::required_size(config_.max_len, config_.intermediate_size)});
+          {(void **)&gate_bc_ptr[i],
+           T::BufferC::required_size(config_.max_len,
+                                     config_.intermediate_size)});
       m_mem_requests.push_back(
-          {(void **)&up_bc_ptr[i], T::BufferC::required_size(config_.max_len, config_.intermediate_size)});
+          {(void **)&up_bc_ptr[i],
+           T::BufferC::required_size(config_.max_len,
+                                     config_.intermediate_size)});
       m_mem_requests.push_back(
-          {(void **)&down_ba_ptr[i], T::BufferA::required_size(config_.max_len, config_.intermediate_size)});
+          {(void **)&down_ba_ptr[i],
+           T::BufferA::required_size(config_.max_len,
+                                     config_.intermediate_size)});
       m_mem_requests.push_back(
-          {(void **)&down_bc_ptr[i], T::BufferC::required_size(config_.max_len, config_.hidden_size)});
+          {(void **)&down_bc_ptr[i],
+           T::BufferC::required_size(config_.max_len, config_.hidden_size)});
     }
     shared_mem_buffer.alloc(this, m_mem_requests);
 
@@ -171,14 +195,16 @@ public:
     m_local_down_output_ptr_.resize(config_.expert_num);
 
     for (uint64_t i = 0; i < config_.expert_num; i++) {
-      gate_up_ba_.push_back(
-          std::make_shared<typename T::BufferA>(config_.max_len, config_.hidden_size, gate_up_ba_ptr[i]));
-      gate_bc_.push_back(
-          std::make_shared<typename T::BufferC>(config_.max_len, config_.intermediate_size, gate_bc_ptr[i]));
-      up_bc_.push_back(std::make_shared<typename T::BufferC>(config_.max_len, config_.intermediate_size, up_bc_ptr[i]));
-      down_ba_.push_back(
-          std::make_shared<typename T::BufferA>(config_.max_len, config_.intermediate_size, down_ba_ptr[i]));
-      down_bc_.push_back(std::make_shared<typename T::BufferC>(config_.max_len, config_.hidden_size, down_bc_ptr[i]));
+      gate_up_ba_.push_back(std::make_shared<typename T::BufferA>(
+          config_.max_len, config_.hidden_size, gate_up_ba_ptr[i]));
+      gate_bc_.push_back(std::make_shared<typename T::BufferC>(
+          config_.max_len, config_.intermediate_size, gate_bc_ptr[i]));
+      up_bc_.push_back(std::make_shared<typename T::BufferC>(
+          config_.max_len, config_.intermediate_size, up_bc_ptr[i]));
+      down_ba_.push_back(std::make_shared<typename T::BufferA>(
+          config_.max_len, config_.intermediate_size, down_ba_ptr[i]));
+      down_bc_.push_back(std::make_shared<typename T::BufferC>(
+          config_.max_len, config_.hidden_size, down_bc_ptr[i]));
 
 #ifdef USE_NUMA
       int numa_nodes = numa_num_configured_nodes();
@@ -186,34 +212,43 @@ public:
       up_bb_numa_.resize(numa_nodes);
       down_bb_numa_.resize(numa_nodes);
       for (int j = 0; j < numa_nodes; j++) {
-        void *gate_bb_ptr =
-            numa_alloc_aligned(T::BufferB::required_size(config_.intermediate_size, config_.hidden_size), j, 64);
-        gate_bb_numa_[j].push_back(
-            std::make_shared<typename T::BufferB>(config_.intermediate_size, config_.hidden_size, gate_bb_ptr));
-        void *up_bb_ptr =
-            numa_alloc_aligned(T::BufferB::required_size(config_.intermediate_size, config_.hidden_size), j, 64);
-        up_bb_numa_[j].push_back(
-            std::make_shared<typename T::BufferB>(config_.intermediate_size, config_.hidden_size, up_bb_ptr));
-        void *down_bb_ptr =
-            numa_alloc_aligned(T::BufferB::required_size(config_.hidden_size, config_.intermediate_size), j, 64);
-        down_bb_numa_[j].push_back(
-            std::make_shared<typename T::BufferB>(config_.hidden_size, config_.intermediate_size, down_bb_ptr));
+        void *gate_bb_ptr = numa_alloc_aligned(
+            T::BufferB::required_size(config_.intermediate_size,
+                                      config_.hidden_size),
+            j, 64);
+        gate_bb_numa_[j].push_back(std::make_shared<typename T::BufferB>(
+            config_.intermediate_size, config_.hidden_size, gate_bb_ptr));
+        void *up_bb_ptr = numa_alloc_aligned(
+            T::BufferB::required_size(config_.intermediate_size,
+                                      config_.hidden_size),
+            j, 64);
+        up_bb_numa_[j].push_back(std::make_shared<typename T::BufferB>(
+            config_.intermediate_size, config_.hidden_size, up_bb_ptr));
+        void *down_bb_ptr = numa_alloc_aligned(
+            T::BufferB::required_size(config_.hidden_size,
+                                      config_.intermediate_size),
+            j, 64);
+        down_bb_numa_[j].push_back(std::make_shared<typename T::BufferB>(
+            config_.hidden_size, config_.intermediate_size, down_bb_ptr));
       }
 #else
-      void *gate_bb_ptr =
-          std::aligned_alloc(64, T::BufferB::required_size(config_.intermediate_size, config_.hidden_size));
-      gate_bb_.push_back(
-          std::make_shared<typename T::BufferB>(config_.intermediate_size, config_.hidden_size, gate_bb_ptr));
+      void *gate_bb_ptr = std::aligned_alloc(
+          64, T::BufferB::required_size(config_.intermediate_size,
+                                        config_.hidden_size));
+      gate_bb_.push_back(std::make_shared<typename T::BufferB>(
+          config_.intermediate_size, config_.hidden_size, gate_bb_ptr));
 
-      void *up_bb_ptr =
-          std::aligned_alloc(64, T::BufferB::required_size(config_.intermediate_size, config_.hidden_size));
-      up_bb_.push_back(
-          std::make_shared<typename T::BufferB>(config_.intermediate_size, config_.hidden_size, up_bb_ptr));
+      void *up_bb_ptr = std::aligned_alloc(
+          64, T::BufferB::required_size(config_.intermediate_size,
+                                        config_.hidden_size));
+      up_bb_.push_back(std::make_shared<typename T::BufferB>(
+          config_.intermediate_size, config_.hidden_size, up_bb_ptr));
 
-      void *down_bb_ptr =
-          std::aligned_alloc(64, T::BufferB::required_size(config_.hidden_size, config_.intermediate_size));
-      down_bb_.push_back(
-          std::make_shared<typename T::BufferB>(config_.hidden_size, config_.intermediate_size, down_bb_ptr));
+      void *down_bb_ptr = std::aligned_alloc(
+          64, T::BufferB::required_size(config_.hidden_size,
+                                        config_.intermediate_size));
+      down_bb_.push_back(std::make_shared<typename T::BufferB>(
+          config_.hidden_size, config_.intermediate_size, down_bb_ptr));
 #endif
     }
   }
@@ -230,19 +265,26 @@ public:
 #ifdef USE_NUMA
           int numa_nodes = numa_num_configured_nodes();
           for (int j = 0; j < numa_nodes; j++) {
-            gate_bb_numa_[j][expert_idx]->from_mat((ggml_bf16_t *)config_.gate_proj +
-                                                       expert_idx * config_.intermediate_size * config_.hidden_size,
-                                                   ith, nth);
-            up_bb_numa_[j][expert_idx]->from_mat((ggml_bf16_t *)config_.up_proj +
-                                                     expert_idx * config_.intermediate_size * config_.hidden_size,
-                                                 ith, nth);
+            gate_bb_numa_[j][expert_idx]->from_mat(
+                (ggml_bf16_t *)config_.gate_proj +
+                    expert_idx * config_.intermediate_size *
+                        config_.hidden_size,
+                ith, nth);
+            up_bb_numa_[j][expert_idx]->from_mat(
+                (ggml_bf16_t *)config_.up_proj + expert_idx *
+                                                     config_.intermediate_size *
+                                                     config_.hidden_size,
+                ith, nth);
           }
 #else
-          gate_bb_[expert_idx]->from_mat((ggml_bf16_t *)config_.gate_proj +
-                                             expert_idx * config_.intermediate_size * config_.hidden_size,
-                                         ith, nth);
+          gate_bb_[expert_idx]->from_mat(
+              (ggml_bf16_t *)config_.gate_proj +
+                  expert_idx * config_.intermediate_size * config_.hidden_size,
+              ith, nth);
           up_bb_[expert_idx]->from_mat(
-              (ggml_bf16_t *)config_.up_proj + expert_idx * config_.intermediate_size * config_.hidden_size, ith, nth);
+              (ggml_bf16_t *)config_.up_proj +
+                  expert_idx * config_.intermediate_size * config_.hidden_size,
+              ith, nth);
 #endif
         },
         nullptr);
@@ -255,14 +297,88 @@ public:
 #ifdef USE_NUMA
           int numa_nodes = numa_num_configured_nodes();
           for (int j = 0; j < numa_nodes; j++) {
-            down_bb_numa_[j][expert_idx]->from_mat((ggml_bf16_t *)config_.down_proj +
-                                                       expert_idx * config_.hidden_size * config_.intermediate_size,
-                                                   ith, nth);
+            down_bb_numa_[j][expert_idx]->from_mat(
+                (ggml_bf16_t *)config_.down_proj +
+                    expert_idx * config_.hidden_size *
+                        config_.intermediate_size,
+                ith, nth);
           }
 #else
           down_bb_[expert_idx]->from_mat((ggml_bf16_t *)config_.down_proj +
-                                             expert_idx * config_.hidden_size * config_.intermediate_size,
+                                             expert_idx * config_.hidden_size *
+                                                 config_.intermediate_size,
                                          ith, nth);
+#endif
+        },
+        nullptr);
+  }
+
+  // Add specialized weight loading function for int8 matrices
+  void load_weights_int8(Backend *backend) {
+    // Validate weight pointers before processing
+    if (!config_.gate_proj || !config_.up_proj || !config_.down_proj) {
+      printf("ERROR: One or more weight pointers are null in load_weights_int8\n");
+      return;
+    }
+
+    int nth = T::recommended_nth(config_.intermediate_size);
+    backend->do_work_stealing_job(
+        nth * config_.expert_num, nullptr,
+        [&](int task_id) {
+          uint64_t expert_idx = task_id / nth;
+          int ith = task_id % nth;
+
+          // Calculate pointers with bounds checking
+          int8_t* gate_proj_ptr = (int8_t*)config_.gate_proj + 
+              expert_idx * config_.intermediate_size * config_.hidden_size;
+          int8_t* up_proj_ptr = (int8_t*)config_.up_proj + 
+              expert_idx * config_.intermediate_size * config_.hidden_size;
+          
+          // Validate weight pointer ranges
+          if (expert_idx >= config_.expert_num) {
+            printf("ERROR: Expert index %lu out of bounds (max: %d)\n", 
+                   expert_idx, config_.expert_num);
+            return;
+          }
+
+#ifdef USE_NUMA
+          int numa_nodes = numa_num_configured_nodes();
+          for (int j = 0; j < numa_nodes; j++) {
+            gate_bb_numa_[j][expert_idx]->from_mat_int8(gate_proj_ptr, ith, nth);
+            up_bb_numa_[j][expert_idx]->from_mat_int8(up_proj_ptr, ith, nth);
+          }
+#else
+          gate_bb_[expert_idx]->from_mat_int8(gate_proj_ptr, ith, nth);
+          up_bb_[expert_idx]->from_mat_int8(up_proj_ptr, ith, nth);
+#endif
+        },
+        nullptr);
+        
+    nth = T::recommended_nth(config_.hidden_size);
+    backend->do_work_stealing_job(
+        nth * config_.expert_num, nullptr,
+        [&](int task_id) {
+          uint64_t expert_idx = task_id / nth;
+          int ith = task_id % nth;
+
+          // Calculate pointer with bounds checking
+          int8_t* down_proj_ptr = (int8_t*)config_.down_proj + 
+              expert_idx * config_.hidden_size * config_.intermediate_size;
+          
+          // Validate expert index
+          if (expert_idx >= config_.expert_num) {
+            printf("ERROR: Expert index %lu out of bounds (max: %d)\n", 
+                   expert_idx, config_.expert_num);
+            return;
+          }
+            
+#ifdef USE_NUMA
+          int numa_nodes = numa_num_configured_nodes();
+          for (int j = 0; j < numa_nodes; j++) {
+            down_bb_numa_[j][expert_idx]->from_mat_int8(down_proj_ptr, ith, nth);
+          }
+#else
+          down_bb_[expert_idx]->from_mat_int8(down_proj_ptr, ith, nth);
 #endif
         },
         nullptr);
@@ -270,7 +386,8 @@ public:
 
   void warm_up(Backend *backend) {}
 
-  void forward(int qlen, int k, const uint64_t *expert_ids, const float *weights, const void *input, void *output,
+  void forward(int qlen, int k, const uint64_t *expert_ids,
+               const float *weights, const void *input, void *output,
                int *batch_size_tensor, Backend *backend) {
     bool use_amx = (qlen > 4 * config_.expert_num / config_.routed_expert_num);
     qlen = batch_size_tensor[0];
@@ -292,17 +409,22 @@ public:
     uint64_t offset = 0;
     for (int i = 0; i < config_.expert_num; i++) {
       m_local_input_ptr_[i] = m_local_input_ + offset * config_.hidden_size;
-      m_local_gate_output_ptr_[i] = m_local_gate_output_ + offset * config_.intermediate_size;
-      m_local_up_output_ptr_[i] = m_local_up_output_ + offset * config_.intermediate_size;
-      m_local_down_output_ptr_[i] = m_local_down_output_ + offset * config_.hidden_size;
+      m_local_gate_output_ptr_[i] =
+          m_local_gate_output_ + offset * config_.intermediate_size;
+      m_local_up_output_ptr_[i] =
+          m_local_up_output_ + offset * config_.intermediate_size;
+      m_local_down_output_ptr_[i] =
+          m_local_down_output_ + offset * config_.hidden_size;
       offset += m_local_num_[i];
     }
     backend->do_work_stealing_job(
         qlen, nullptr,
         [&](int i) {
           for (int j = 0; j < k; j++) {
-            memcpy(m_local_input_ptr_[expert_ids[i * k + j]] + m_local_pos_[i][j] * config_.hidden_size,
-                   (ggml_bf16_t *)input + i * config_.hidden_size, sizeof(ggml_bf16_t) * config_.hidden_size);
+            memcpy(m_local_input_ptr_[expert_ids[i * k + j]] +
+                       m_local_pos_[i][j] * config_.hidden_size,
+                   (ggml_bf16_t *)input + i * config_.hidden_size,
+                   sizeof(ggml_bf16_t) * config_.hidden_size);
           }
         },
         nullptr);
@@ -311,7 +433,8 @@ public:
         [&](int task_id) {
           int expert_idx = m_expert_id_map_[task_id];
 
-          gate_up_ba_[expert_idx]->from_mat(m_local_num_[expert_idx], m_local_input_ptr_[expert_idx], 0, 1);
+          gate_up_ba_[expert_idx]->from_mat(
+              m_local_num_[expert_idx], m_local_input_ptr_[expert_idx], 0, 1);
         },
         nullptr);
     int nth = T::recommended_nth(config_.intermediate_size);
@@ -321,31 +444,49 @@ public:
           int expert_idx = m_expert_id_map_[task_id / nth];
           int ith = task_id % nth;
 #ifdef USE_NUMA
-          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size, config_.hidden_size,
-                       gate_up_ba_[expert_idx], gate_bb_numa_[Backend::numa_node][expert_idx], gate_bc_[expert_idx],
-                       ith, nth, use_amx);
-          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size, config_.hidden_size,
-                       gate_up_ba_[expert_idx], up_bb_numa_[Backend::numa_node][expert_idx], up_bc_[expert_idx], ith,
-                       nth, use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size,
+                       config_.hidden_size, gate_up_ba_[expert_idx],
+                       gate_bb_numa_[Backend::numa_node][expert_idx],
+                       gate_bc_[expert_idx], ith, nth, use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size,
+                       config_.hidden_size, gate_up_ba_[expert_idx],
+                       up_bb_numa_[Backend::numa_node][expert_idx],
+                       up_bc_[expert_idx], ith, nth, use_amx);
 #else
-          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size, config_.hidden_size,
-                       gate_up_ba_[expert_idx], gate_bb_[expert_idx], gate_bc_[expert_idx], ith, nth, use_amx);
-          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size, config_.hidden_size,
-                       gate_up_ba_[expert_idx], up_bb_[expert_idx], up_bc_[expert_idx], ith, nth, use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size,
+                       config_.hidden_size, gate_up_ba_[expert_idx],
+                       gate_bb_[expert_idx], gate_bc_[expert_idx], ith, nth,
+                       use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.intermediate_size,
+                       config_.hidden_size, gate_up_ba_[expert_idx],
+                       up_bb_[expert_idx], up_bc_[expert_idx], ith, nth,
+                       use_amx);
 #endif
-          gate_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_gate_output_ptr_[expert_idx], ith, nth);
-          up_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_up_output_ptr_[expert_idx], ith, nth);
-          auto [n_start, n_end] = T::split_range_n(config_.intermediate_size, ith, nth);
+          gate_bc_[expert_idx]->to_mat(m_local_num_[expert_idx],
+                                       m_local_gate_output_ptr_[expert_idx],
+                                       ith, nth);
+          up_bc_[expert_idx]->to_mat(m_local_num_[expert_idx],
+                                     m_local_up_output_ptr_[expert_idx], ith,
+                                     nth);
+          auto [n_start, n_end] =
+              T::split_range_n(config_.intermediate_size, ith, nth);
           for (int i = 0; i < m_local_num_[expert_idx]; i++) {
-            ggml_bf16_t *gate_output_ptr = &m_local_gate_output_ptr_[expert_idx][i * config_.intermediate_size];
-            ggml_bf16_t *up_output_ptr = &m_local_up_output_ptr_[expert_idx][i * config_.intermediate_size];
+            ggml_bf16_t *gate_output_ptr =
+                &m_local_gate_output_ptr_[expert_idx]
+                                         [i * config_.intermediate_size];
+            ggml_bf16_t *up_output_ptr =
+                &m_local_up_output_ptr_[expert_idx]
+                                       [i * config_.intermediate_size];
             for (int j = n_start; j < n_end; j += 32) {
               __m512 gate_val0, gate_val1, up_val0, up_val1;
-              avx512_32xbf16_to_32xfp32((__m512i *)(gate_output_ptr + j), &gate_val0, &gate_val1);
-              avx512_32xbf16_to_32xfp32((__m512i *)(up_output_ptr + j), &up_val0, &up_val1);
+              avx512_32xbf16_to_32xfp32((__m512i *)(gate_output_ptr + j),
+                                        &gate_val0, &gate_val1);
+              avx512_32xbf16_to_32xfp32((__m512i *)(up_output_ptr + j),
+                                        &up_val0, &up_val1);
               __m512 result0 = act_fn(gate_val0, up_val0);
               __m512 result1 = act_fn(gate_val1, up_val1);
-              avx512_32xfp32_to_32xbf16(&result0, &result1, (__m512i *)(gate_output_ptr + j));
+              avx512_32xfp32_to_32xbf16(&result0, &result1,
+                                        (__m512i *)(gate_output_ptr + j));
             }
           }
         },
@@ -354,7 +495,9 @@ public:
         activated_expert, nullptr,
         [&](int task_id) {
           int expert_idx = m_expert_id_map_[task_id];
-          down_ba_[expert_idx]->from_mat(m_local_num_[expert_idx], m_local_gate_output_ptr_[expert_idx], 0, 1);
+          down_ba_[expert_idx]->from_mat(m_local_num_[expert_idx],
+                                         m_local_gate_output_ptr_[expert_idx],
+                                         0, 1);
         },
         nullptr);
     nth = T::recommended_nth(config_.hidden_size);
@@ -364,13 +507,19 @@ public:
           int expert_idx = m_expert_id_map_[task_id / nth];
           int ith = task_id % nth;
 #ifdef USE_NUMA
-          amx::mat_mul(m_local_num_[expert_idx], config_.hidden_size, config_.intermediate_size, down_ba_[expert_idx],
-                       down_bb_numa_[Backend::numa_node][expert_idx], down_bc_[expert_idx], ith, nth, use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.hidden_size,
+                       config_.intermediate_size, down_ba_[expert_idx],
+                       down_bb_numa_[Backend::numa_node][expert_idx],
+                       down_bc_[expert_idx], ith, nth, use_amx);
 #else
-          amx::mat_mul(m_local_num_[expert_idx], config_.hidden_size, config_.intermediate_size, down_ba_[expert_idx],
-                       down_bb_[expert_idx], down_bc_[expert_idx], ith, nth, use_amx);
+          amx::mat_mul(m_local_num_[expert_idx], config_.hidden_size,
+                       config_.intermediate_size, down_ba_[expert_idx],
+                       down_bb_[expert_idx], down_bc_[expert_idx], ith, nth,
+                       use_amx);
 #endif
-          down_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_down_output_ptr_[expert_idx], ith, nth);
+          down_bc_[expert_idx]->to_mat(m_local_num_[expert_idx],
+                                       m_local_down_output_ptr_[expert_idx],
+                                       ith, nth);
         },
         nullptr);
     backend->do_work_stealing_job(
@@ -382,17 +531,30 @@ public:
             for (int j = 0; j < k; j++) {
               __m512 weight = _mm512_set1_ps(weights[i * k + j]);
               __m512 down_output0, down_output1;
-              avx512_32xbf16_to_32xfp32((__m512i *)(m_local_down_output_ptr_[expert_ids[i * k + j]] +
-                                                    m_local_pos_[i][j] * config_.hidden_size + e),
-                                        &down_output0, &down_output1);
+              avx512_32xbf16_to_32xfp32(
+                  (__m512i *)(m_local_down_output_ptr_[expert_ids[i * k + j]] +
+                              m_local_pos_[i][j] * config_.hidden_size + e),
+                  &down_output0, &down_output1);
               x0 = _mm512_fmadd_ps(down_output0, weight, x0);
               x1 = _mm512_fmadd_ps(down_output1, weight, x1);
             }
-            avx512_32xfp32_to_32xbf16(&x0, &x1, (__m512i *)((ggml_bf16_t *)output + i * config_.hidden_size + e));
+            avx512_32xfp32_to_32xbf16(&x0, &x1,
+                                      (__m512i *)((ggml_bf16_t *)output +
+                                                  i * config_.hidden_size + e));
           }
         },
         nullptr);
   }
 };
+
+// Template specialization for GemmKernel224Int8 to ensure the load_weights
+// method uses from_mat_int8
+template<>
+inline void AMX_MOE<amx::GemmKernel224Int8>::load_weights(Backend *backend) {
+  // For the GemmKernel224Int8 specialization, we'll redirect to
+  // load_weights_int8 This ensures that from_mat_int8 is used instead of
+  // from_mat
+  this->load_weights_int8(backend);
+}
 
 #endif

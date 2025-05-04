@@ -51,7 +51,7 @@ def bench_moe(quant_mode: str):
                 CPUInfer.sync()
             elif quant_mode == "int8":
                 moe = cpuinfer_ext.moe.AMXInt8_MOE(config)
-                CPUInfer.submit(moe.load_weights())
+                CPUInfer.submit(moe.load_weights_int8())
                 CPUInfer.sync()
             gate_projs.append(gate_proj)
             up_projs.append(up_proj)

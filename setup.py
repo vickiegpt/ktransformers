@@ -33,13 +33,13 @@ import torch
 import torch.version
 from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 from setuptools import setup, Extension
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME, ROCM_HOME
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, ROCM_HOME
 try:
     from torch_musa.utils.simple_porting import SimplePorting
     from torch_musa.utils.musa_extension import BuildExtension, MUSAExtension, MUSA_HOME
 except ImportError:
     MUSA_HOME=None
-    
+CUDA_HOME = "/usr/"
 with_balance = os.environ.get("USE_BALANCE_SERVE", "0") == "1"
 
 class CpuInstructInfo:
@@ -47,7 +47,7 @@ class CpuInstructInfo:
     FANCY = "FANCY"
     AVX512 = "AVX512"
     AVX2 = "AVX2"
-    CMAKE_NATIVE = "-DLLAMA_NATIVE=ON"
+    CMAKE_NATIVE = "-DLLAMA_NATIVE=ON -DCMAKE_BUILD_TYPE=Debug"
     CMAKE_FANCY = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON -DLLAMA_AVX512=ON -DLLAMA_AVX512_FANCY_SIMD=ON"
     CMAKE_AVX512 = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON -DLLAMA_AVX512=ON"
     CMAKE_AVX2 = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON"
@@ -474,7 +474,7 @@ class CMakeBuild(BuildExtension):
 
         debug = int(os.environ.get("DEBUG", 0)
                     ) if self.debug is None else self.debug
-        cfg = "Debug" if debug else "Release"
+        cfg = "Debug"
 
         # CMake lets you override the generator - we need to check this.
         # Can be set with Conda-Build, for example.
@@ -588,12 +588,13 @@ if CUDA_HOME is not None or ROCM_HOME is not None:
         'csrc/ktransformers_ext/cuda/gptq_marlin/gptq_marlin.cu'
     ],
     extra_compile_args={
-            'cxx': ['-O3', '-DKTRANSFORMERS_USE_CUDA'],
+            'cxx': ['-O3', '-DKTRANSFORMERS_USE_CUDA', '-g'],
             'nvcc': [
                 '-O3',
                 # '--use_fast_math',
                 '-Xcompiler', '-fPIC',
                 '-DKTRANSFORMERS_USE_CUDA',
+                '-g'
             ]
         }
     )
@@ -633,8 +634,8 @@ ext_modules = [
             'csrc/custom_marlin/gptq_marlin/gptq_marlin_repack.cu',
         ],
         extra_compile_args={
-            'cxx': ['-O3'],
-            'nvcc': ['-O3', '-Xcompiler', '-fPIC'],
+            'cxx': ['-O3', '-g'],
+            'nvcc': ['-O3', '-Xcompiler', '-fPIC', '-g'],
         },
     )
 ]

@@ -218,7 +218,7 @@ class KExpertsCPU(KExpertsBase):
                 down_ptr,
             )
             self.moe = AMXInt8_MOE(moe_config)
-            self.cpu_infer.submit(self.moe.load_weights())
+            self.cpu_infer.submit(self.moe.load_weights_int8())
             self.cpu_infer.sync()
         # print(n_routed_experts, hidden_size, moe_intermediate_size)
         num_experts_per_tok = self.config.num_experts_per_tok
