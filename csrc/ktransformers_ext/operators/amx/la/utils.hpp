@@ -10,6 +10,7 @@
 
 #pragma once
 #include <cstdint>
+#include <immintrin.h>
 
 
 template <typename T>
@@ -37,7 +38,35 @@ static inline void avx512_copy_32xbf16(__m512i* src, __m512i* dst) {
 }
 
 static inline void avx512_32xfp32_to_32xbf16(__m512* src0, __m512* src1, __m512i* dst) {
+#ifdef __AVX512BF16__
   _mm512_storeu_si512(dst, __m512i(_mm512_cvtne2ps_pbh(*src1, *src0)));
+#else
+  // Fallback implementation without AVX512BF16
+  // Convert 32 FP32 values to 32 BF16 values by truncating mantissa
+  
+  // Process src0 (first 16 FP32 -> first 16 BF16)
+  __m512i src0_int = _mm512_castps_si512(*src0);
+  // Round by adding 0x7FFF to account for truncation
+  __m512i rounded0 = _mm512_add_epi32(src0_int, _mm512_set1_epi32(0x7FFF));
+  // Extract upper 16 bits
+  __m512i bf16_low = _mm512_srli_epi32(rounded0, 16);
+  
+  // Process src1 (next 16 FP32 -> next 16 BF16)
+  __m512i src1_int = _mm512_castps_si512(*src1);
+  __m512i rounded1 = _mm512_add_epi32(src1_int, _mm512_set1_epi32(0x7FFF));
+  __m512i bf16_high = _mm512_srli_epi32(rounded1, 16);
+  
+  // Pack the results using AVX512BW instructions
+  // Convert 32-bit integers to 16-bit integers and pack
+  __m256i low_packed = _mm512_cvtepi32_epi16(bf16_low);
+  __m256i high_packed = _mm512_cvtepi32_epi16(bf16_high);
+  
+  // Combine into a single 512-bit register
+  __m512i result = _mm512_castsi256_si512(low_packed);
+  result = _mm512_inserti64x4(result, high_packed, 1);
+  
+  _mm512_storeu_si512(dst, result);
+#endif
 }
 
 static inline void avx512_32xbf16_to_32xfp32(__m512i* src, __m512* dst0, __m512* dst1) {

@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -g -ffast-math -fopenmp")
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=${_GLIBCXX_USE_CXX11_ABI})
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
 set(CMAKE_BUILD_TYPE "RelWithDebInfo")
 # set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -ffast-math -fopenmp")
 # set(CMAKE_BUILD_TYPE "Debug")
@@ -221,6 +221,14 @@ elseif (CMAKE_OSX_ARCHITECTURES STREQUAL "x86_64" OR CMAKE_GENERATOR_PLATFORM_LW
         endif()
         if (LLAMA_AVX512_BF16)
             list(APPEND ARCH_FLAGS -mavx512bf16)
+        endif()
+        # Add AMX flags if AMX is detected
+        if(__HAS_AMX__)
+            list(APPEND ARCH_FLAGS -mamx-tile -mamx-int8 -mamx-bf16)
+            # AMX requires AVX512BF16 support
+            if(NOT LLAMA_AVX512_BF16)
+                list(APPEND ARCH_FLAGS -mavx512bf16)
+            endif()
         endif()
     endif()
 elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc64")

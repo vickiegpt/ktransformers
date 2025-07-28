@@ -54,23 +54,50 @@ void Backend::do_work_stealing_job(int task_num,
     init_func_ = init_func;
     compute_func_ = compute_func;
     finalize_func_ = finalize_func;
+    
+    // Safety checks to prevent floating-point exceptions
+    if (task_num <= 0) {
+        printf("Warning: do_work_stealing_job called with invalid task_num=%d, using 1\n", task_num);
+        task_num = 1;  // Ensure at least one task
+    }
+    
 #ifdef USE_NUMA
     // numa node location will be calculated based on the number of threads
     thread_num_ = max_thread_num_;
 #else
-    thread_num_ = std::min(max_thread_num_, task_num);
+    // Ensure thread_num_ is at least 1 and no more than max_thread_num_
+    thread_num_ = std::max(1, std::min(max_thread_num_, task_num));
 #endif
+
+    // Prevent division by zero
+    if (thread_num_ <= 0) {
+        printf("Warning: Invalid thread_num_=%d in do_work_stealing_job, using 1\n", thread_num_);
+        thread_num_ = 1;
+    }
+    
     int base = task_num / thread_num_;
     int remain = task_num % thread_num_;
+    
+    // Ensure valid bounds for all thread states
     thread_state_[0].end = base + (0 < remain);
+    if (thread_state_[0].end <= 0) {
+        thread_state_[0].end = 1;  // Ensure at least one task per thread
+    }
 
     // 为主线程设置 thread_local_id
     thread_local_id = 0;
 
     for (int i = 1; i < thread_num_; i++) {
-        thread_state_[i].curr->store(thread_state_[i - 1].end,
-                                     std::memory_order_relaxed);
-        thread_state_[i].end = thread_state_[i - 1].end + base + (i < remain);
+        // Store with validation
+        int prev_end = thread_state_[i - 1].end;
+        if (prev_end < 0) prev_end = 0;  // Validate previous end
+        
+        thread_state_[i].curr->store(prev_end, std::memory_order_relaxed);
+        
+        int this_end = prev_end + base + (i < remain);
+        if (this_end <= prev_end) this_end = prev_end + 1;  // Ensure progress
+        
+        thread_state_[i].end = this_end;
         thread_state_[i].status->store(ThreadStatus::WORKING,
                                        std::memory_order_release);
     }

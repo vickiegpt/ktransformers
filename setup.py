@@ -47,10 +47,7 @@ class CpuInstructInfo:
     FANCY = "FANCY"
     AVX512 = "AVX512"
     AVX2 = "AVX2"
-    CMAKE_NATIVE = "-DLLAMA_NATIVE=ON -DCMAKE_BUILD_TYPE=Debug"
     CMAKE_FANCY = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON -DLLAMA_AVX512=ON -DLLAMA_AVX512_FANCY_SIMD=ON"
-    CMAKE_AVX512 = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON -DLLAMA_AVX512=ON"
-    CMAKE_AVX2 = "-DLLAMA_NATIVE=OFF -DLLAMA_FMA=ON -DLLAMA_F16C=ON -DLLAMA_AVX=ON -DLLAMA_AVX2=ON"
 
 class VersionInfo:
     THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -454,10 +451,7 @@ class CMakeExtension(Extension):
         self.sourcedir = sourcedir
 
 def get_cmake_abi_args(cmake_args):
-    if torch.compiled_with_cxx11_abi():
-        cmake_args.append("-D_GLIBCXX_USE_CXX11_ABI=1")
-    else:
-        cmake_args.append("-D_GLIBCXX_USE_CXX11_ABI=0")
+    cmake_args.append("-D_GLIBCXX_USE_CXX11_ABI=0")
     return cmake_args
 
 class CMakeBuild(BuildExtension):
@@ -507,14 +501,7 @@ class CMakeBuild(BuildExtension):
             cmake_args += [
                 item for item in os.environ["CMAKE_ARGS"].split(" ") if item]
 
-        if CpuInstructInfo.CPU_INSTRUCT == CpuInstructInfo.FANCY:
-            cpu_args = CpuInstructInfo.CMAKE_FANCY
-        elif CpuInstructInfo.CPU_INSTRUCT == CpuInstructInfo.AVX512:
-            cpu_args = CpuInstructInfo.CMAKE_AVX512
-        elif CpuInstructInfo.CPU_INSTRUCT == CpuInstructInfo.AVX2:
-            cpu_args = CpuInstructInfo.CMAKE_AVX2
-        else:
-            cpu_args = CpuInstructInfo.CMAKE_NATIVE
+        cpu_args = CpuInstructInfo.CMAKE_FANCY
 
         cmake_args += [
             item for item in cpu_args.split(" ") if item

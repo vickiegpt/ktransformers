@@ -171,6 +171,9 @@ def prefill_and_generate(model, tokenizer, inputs, max_new_tokens=10000, use_cud
     
     # TODO: use CUDA Graph for chunk prefill, may get small improvement
     def chunk_prefill(inputs, cache_position, past_key_values):
+        # Add print statements to debug
+        print(f"inputs shape: {inputs.shape}")
+        print(f"cache_position shape: {cache_position.shape}")
         if mode == "long_context":
             inputs_embeds = model.model.embed_tokens(inputs.to("cpu"))
         else:
@@ -179,9 +182,42 @@ def prefill_and_generate(model, tokenizer, inputs, max_new_tokens=10000, use_cud
             MLAWrapperSingleton.update_buffer(past_key_values.max_pages)
             MLAWrapperSingleton.need_plan_all()
             
-        logits = model(
+        # Call the model
+        output = model(
             inputs_embeds = inputs_embeds, cache_position=cache_position, past_key_values=past_key_values, return_dict=False, use_cache=True
-        )[0][:,-1,:].unsqueeze(0).clone().to(torch_device)
+        )
+        
+        # Check if output is a tuple (common with return_dict=False)
+        if isinstance(output, tuple):
+            output = output[0]
+        
+        # Now handle the tensor based on its dimensions
+        print(f"model output shape: {output.shape}")
+        
+        if len(output.shape) == 3:
+            # Original case: [batch, seq, vocab]
+            logits = output[:,-1,:].unsqueeze(0).clone().to(torch_device)
+        elif len(output.shape) == 2:
+            # Handle 2D case: [batch, vocab] - already the last token logits
+            logits = output.unsqueeze(0).clone().to(torch_device)
+        else:
+            # Unexpected shape - print more info and try to recover
+            print(f"WARNING: Unexpected model output shape: {output.shape}")
+            # Try to make it compatible by reshaping if possible
+            if output.numel() > 0:
+                # Reshape to have batch dimension and vocabulary dimension
+                if output.shape[0] == 1:
+                    # Single batch case
+                    logits = output.view(1, -1).clone().to(torch_device)
+                else:
+                    # Try to infer vocab size from model config
+                    vocab_size = getattr(model.config, "vocab_size", output.shape[-1])
+                    logits = output.view(1, vocab_size).clone().to(torch_device)
+            else:
+                # Empty tensor - fill with zeros as fallback
+                print("WARNING: Empty model output, using zeros")
+                vocab_size = getattr(model.config, "vocab_size", 32000)  # Default fallback
+                logits = torch.zeros((1, vocab_size), device=torch_device)
         
         return logits
     

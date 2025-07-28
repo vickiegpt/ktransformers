@@ -11,11 +11,11 @@ rm -rf csrc/ktransformers_ext/cuda/dist
 rm -rf csrc/ktransformers_ext/cuda/*.egg-info
 rm -rf ~/.ktransformers
 echo "Installing python dependencies from requirements.txt"
-pip install -r requirements-local_chat.txt
-pip install -r ktransformers/server/requirements.txt
+python -m pip install -r requirements-local_chat.txt
+python -m pip install -r ktransformers/server/requirements.txt
 echo "Installing ktransformers"
-KTRANSFORMERS_FORCE_BUILD=TRUE pip install -v . --no-build-isolation
-pip install third_party/custom_flashinfer/
+KTRANSFORMERS_FORCE_BUILD=TRUE python -m pip install -v . --no-build-isolation
+python -m pip install third_party/custom_flashinfer/
 
 # SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])")
 # echo "Copying thirdparty libs to $SITE_PACKAGES"

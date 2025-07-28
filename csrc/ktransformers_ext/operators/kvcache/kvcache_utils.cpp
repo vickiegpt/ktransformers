@@ -81,20 +81,22 @@ KVCache::KVCache(KVCacheConfig config) {
     this->config_ = config;
 
     n_gqa_ = config_.q_head_num / config_.kv_head_num;
+    
+    // Initialize retrieval-related structures for all kv_types
+    selected_blocks_num_history_.resize(config_.layer_num / config_.layer_step);
+    if (config_.retrieval_type == RetrievalType::LAYER) {
+        selected_blocks_history_.resize(config_.layer_num / config_.layer_step);
+    } else if (config_.retrieval_type == RetrievalType::KVHEAD) {
+        selected_blocks_history_kvhead_.resize(config_.layer_num / config_.layer_step);
+    } else if (config_.retrieval_type == RetrievalType::QHEAD) {
+        // QHEAD retrieval type initialization if needed
+    }
+    
+    // Initialize kv_type specific caches
     if (config_.kv_type == ggml_type::GGML_TYPE_F16) {
         // TODO: Elegant implement
         k_cache_fp16_.resize(config_.layer_num);
         v_cache_fp16_.resize(config_.layer_num);
-        selected_blocks_num_history_.resize(config_.layer_num /
-                                            config_.layer_step);
-        if (config_.retrieval_type == RetrievalType::LAYER) {
-            selected_blocks_history_.resize(config_.layer_num /
-                                            config_.layer_step);
-        } else if (config_.retrieval_type == RetrievalType::KVHEAD) {
-            selected_blocks_history_kvhead_.resize(config_.layer_num /
-                                                   config_.layer_step);
-        } else if (config_.retrieval_type == RetrievalType::QHEAD) {
-        }
     } else if (config_.kv_type == ggml_type::GGML_TYPE_Q4_0) {
         k_cache_q4.resize(config.layer_num);
         v_cache_q4.resize(config.layer_num);
