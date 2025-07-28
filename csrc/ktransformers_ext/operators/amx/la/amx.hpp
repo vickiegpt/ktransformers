@@ -1282,75 +1282,16 @@ inline void mat_mul(int m, int n, int k,
         if (!use_amx) {
           __m512 *c512 = (__m512 *)c;
           if (k_block_begin == 0) {
-            for (int m_i = 0; m_i < m; m_i++) {
+            for (int m_i = 0; m_i < m && m_i < K::M_STEP; m_i++) {
               c512[m_i * 2] = _mm512_setzero_ps();
               c512[m_i * 2 + 1] = _mm512_setzero_ps();
             }
           }
 
-          for (int k_begin = 0;
-               k_begin < K::K_BLOCK && k_block_begin + k_begin < k;
-               k_begin += K::K_STEP) {
-            int32_t *a32 = (int32_t *)ba->get_submat(m, k, m_begin,
-                                                     k_block_begin + k_begin);
-            // Convert int8_t buffer to bf16 format for AVX512 BF16 multiply
-            __m512i *b512_tmp =
-                (__m512i *)malloc(K::N_STEP * K::K_STEP * sizeof(float) /
-                                  2); // bf16 is half size of float
-            for (int i = 0; i < K::N_STEP * K::K_STEP / 32; i++) {
-              // Get 64 int8_t elements (512 bits) from the buffer
-              __m512i b_i8 = _mm512_load_si512(
-                  (__m512i *)bb->get_submat(n, k, n_begin,
-                                            k_block_begin + k_begin) +
-                  i);
-
-              // Extract lower and upper 256 bits (32 elements each)
-              __m256i b_i8_lo = _mm512_extracti64x4_epi64(b_i8, 0);
-              __m256i b_i8_hi = _mm512_extracti64x4_epi64(b_i8, 1);
-
-              // Convert lower 16 elements to int32, then to float
-              __m128i b_i8_lo_lo = _mm256_extracti128_si256(b_i8_lo, 0);
-              __m512i b_i32_lo_lo = _mm512_cvtepi8_epi32(b_i8_lo_lo);
-              __m512 b_f32_lo_lo = _mm512_cvtepi32_ps(b_i32_lo_lo);
-
-              // Convert next 16 elements to int32, then to float
-              __m128i b_i8_lo_hi = _mm256_extracti128_si256(b_i8_lo, 1);
-              __m512i b_i32_lo_hi = _mm512_cvtepi8_epi32(b_i8_lo_hi);
-              __m512 b_f32_lo_hi = _mm512_cvtepi32_ps(b_i32_lo_hi);
-
-              // Convert to bf16 and combine into 256 bits
-              __m256bh b_bf16_lo = _mm512_cvtneps_pbh(b_f32_lo_lo);
-              __m256bh b_bf16_hi = _mm512_cvtneps_pbh(b_f32_lo_hi);
-
-              // Store the first 256 bits (32 bf16 elements)
-              _mm256_store_si256((__m256i *)(b512_tmp) + i * 2,
-                                 (__m256i)b_bf16_lo);
-              _mm256_store_si256((__m256i *)(b512_tmp) + i * 2 + 1,
-                                 (__m256i)b_bf16_hi);
-
-              // Convert higher 16 elements to int32, then to float
-              __m128i b_i8_hi_lo = _mm256_extracti128_si256(b_i8_hi, 0);
-              __m512i b_i32_hi_lo = _mm512_cvtepi8_epi32(b_i8_hi_lo);
-              __m512 b_f32_hi_lo = _mm512_cvtepi32_ps(b_i32_hi_lo);
-
-              // Convert last 16 elements to int32, then to float
-              __m128i b_i8_hi_hi = _mm256_extracti128_si256(b_i8_hi, 1);
-              __m512i b_i32_hi_hi = _mm512_cvtepi8_epi32(b_i8_hi_hi);
-              __m512 b_f32_hi_hi = _mm512_cvtepi32_ps(b_i32_hi_hi);
-
-              // Convert to bf16 and combine into 256 bits
-              __m256bh b_bf16_hi_lo = _mm512_cvtneps_pbh(b_f32_hi_lo);
-              __m256bh b_bf16_hi_hi = _mm512_cvtneps_pbh(b_f32_hi_hi);
-
-              // Store the second 256 bits (32 bf16 elements)
-              _mm256_store_si256((__m256i *)(b512_tmp) + i * 2 + 2,
-                                 (__m256i)b_bf16_hi_lo);
-              _mm256_store_si256((__m256i *)(b512_tmp) + i * 2 + 3,
-                                 (__m256i)b_bf16_hi_hi);
-            }
-            __m512bh *b512 = (__m512bh *)b512_tmp;
-
-            for (int m_i = 0; m_i < m; m_i++) {
+          for (int k_begin = 0; k_begin < K::K_BLOCK && k_block_begin + k_begin < k; k_begin += K::K_STEP) {
+            int32_t *a32 = (int32_t *)ba->get_submat(m, k, m_begin, k_block_begin + k_begin);
+            __m512bh *b512 = (__m512bh *)bb->get_submat(n, k, n_begin, k_block_begin + k_begin);
+            for (int m_i = 0; m_i < m && m_i < K::M_STEP; m_i++) {
               for (int k_i = 0; k_i < 16; k_i++) {
                 __m512bh ma = (__m512bh)_mm512_set1_epi32(a32[m_i * 16 + k_i]);
                 for (int n_i = 0; n_i < 2; n_i++) {
@@ -1422,7 +1363,7 @@ inline void mat_mul(int m, int n, int k,
         if (!use_amx) {
           __m512i *c512 = (__m512i *)c;
           if (k_block_begin == 0) {
-            for (int m_i = 0; m_i < m; m_i++) {
+            for (int m_i = 0; m_i < m && m_i < K::M_STEP; m_i++) {
               c512[m_i * 2] = _mm512_setzero_si512();
               c512[m_i * 2 + 1] = _mm512_setzero_si512();
             }
@@ -1434,11 +1375,9 @@ inline void mat_mul(int m, int n, int k,
             static_assert(K::K_STEP * sizeof(int8_t) == sizeof(__m512i));
             static_assert(K::N_STEP / K::TILE_N == 2, "Must be lke this");
 
-            int32_t *a32 = (int32_t *)ba->get_submat(m, k, m_begin,
-                                                     k_block_begin + k_begin);
-            __m512i *b512 = (__m512i *)bb->get_submat(n, k, n_begin,
-                                                      k_block_begin + k_begin);
-            for (int m_i = 0; m_i < m; m_i++) {
+            int32_t *a32 = (int32_t *)ba->get_submat(m, k, m_begin, k_block_begin + k_begin);
+            __m512i *b512 = (__m512i *)bb->get_submat(n, k, n_begin, k_block_begin + k_begin);
+            for (int m_i = 0; m_i < m && m_i < K::M_STEP; m_i++) {
               for (int k_i = 0; k_i < 16; k_i++) {
                 __m512i ma = _mm512_set1_epi32(a32[m_i * 16 + k_i]);
                 for (int n_i = 0; n_i < 2; n_i++) {

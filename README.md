@@ -23,12 +23,13 @@ Our vision for KTransformers is to serve as a flexible platform for experimentin
 
 <h2 id="Updates">🔥 Updates</h2>
 
+* **July 26, 2025**: Support SmallThinker and GLM4-MoE. ([Tutorial](./doc/en/SmallThinker_and_Glm4moe.md))
+* **July 11, 2025**: Support Kimi-K2. ([Tutorial](./doc/en/Kimi-K2.md))
+* **June 30, 2025**: Support 3-layer (GPU-CPU-Disk) [prefix cache](./doc/en/prefix_cache.md) reuse.
+* **May 14, 2025**: Support Intel Arc GPU ([Tutorial](./doc/en/xpu.md)).
 * **Apr 29, 2025**: Support AMX-Int8、 AMX-BF16 and Qwen3MoE ([Tutorial](./doc/en/AMX.md))
 
 https://github.com/user-attachments/assets/fafe8aec-4e22-49a8-8553-59fb5c6b00a2
-
-
-
 
 * **Apr 9, 2025**: Experimental support for LLaMA 4 models ([Tutorial](./doc/en/llama4.md)).
 * **Apr 2, 2025**: Support Multi-concurrency. ([Tutorial](./doc/en/balance-serve.md)).
@@ -59,7 +60,7 @@ https://github.com/user-attachments/assets/ebd70bfa-b2c1-4abb-ae3b-296ed38aa285
 </p>
 
 - **[NEW!!!] Local 671B DeepSeek-Coder-V3/R1:** Running its Q4_K_M version using only 14GB VRAM and 382GB DRAM([Tutorial](./doc/en/DeepseekR1_V3_tutorial.md)).
-
+  
   - Prefill Speed (tokens/s):
     - KTransformers: 54.21 (32 cores) → 74.362 (dual-socket, 2×32 cores) → 255.26 (optimized AMX-based MoE kernel, V0.3 only) → 286.55 (selectively using 6 experts, V0.3 only)
     - Compared to 10.31 tokens/s in llama.cpp with 2×32 cores, achieving up to **27.79× speedup**.
@@ -115,6 +116,15 @@ https://github.com/user-attachments/assets/a865e5e4-bca3-401e-94b8-af3c080e6c12
 <h2 id="quick-start">🚀 Quick Start</h2>
 
 Getting started with KTransformers is simple! Follow the steps below to set up and start using it.
+
+we have already supported vendors:
+
+- Metax
+- Sanechips (ZhuFeng V1.0)
+- Intel
+- Ascend
+- Kunpeng
+- AMD
 
 ### 📥 Installation
 
@@ -185,3 +195,4 @@ If you have any questions, feel free to open an issue. Alternatively, you can jo
 <h2 id="FAQ">🙋 FAQ</h2>
 
 Some common questions are answered in the [FAQ](doc/en/FAQ.md).
+
