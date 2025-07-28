@@ -1,5 +1,5 @@
 fire
-transformers==4.51.3
+transformers==4.53.3
 numpy
 torch>=2.3.0
 packaging
@@ -7,4 +7,3 @@ cpufeature; sys_platform == 'win32' or sys_platform == 'Windows'
 protobuf
 tiktoken
 blobfile
-triton>=3.2

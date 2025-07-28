@@ -73,24 +73,29 @@ static inline __m512 act_fn(__m512 gate_val, __m512 up_val) {
   return _mm512_mul_ps(act_val, up_val);
 }
 
+static inline __m512 relu_act_fn(__m512 gate_val, __m512 up_val) {
+  __m512 zero_vec = _mm512_setzero_ps();
+  __m512 act_val = _mm512_max_ps(zero_vec, gate_val);
+  return _mm512_mul_ps(act_val, up_val);
+}
+
 struct AMX_MOEConfig {
   int expert_num;
   int routed_expert_num;
   int hidden_size;
   int intermediate_size;
   int max_len;
+  bool use_silu;
   void *gate_proj;
   void *up_proj;
   void *down_proj;
 
   AMX_MOEConfig() {}
 
-  AMX_MOEConfig(int expert_num, int routed_expert_num, int hidden_size,
-                int intermediate_size, int max_len, void *gate_proj,
-                void *up_proj, void *down_proj)
-      : expert_num(expert_num), routed_expert_num(routed_expert_num),
-        hidden_size(hidden_size), intermediate_size(intermediate_size),
-        max_len(max_len), gate_proj(gate_proj), up_proj(up_proj),
+  AMX_MOEConfig(int expert_num, int routed_expert_num, int hidden_size, int intermediate_size, int max_len, bool use_silu,
+                void *gate_proj, void *up_proj, void *down_proj)
+      : expert_num(expert_num), routed_expert_num(routed_expert_num), hidden_size(hidden_size),
+        intermediate_size(intermediate_size), max_len(max_len), use_silu(use_silu), gate_proj(gate_proj), up_proj(up_proj),
         down_proj(down_proj) {}
 };
 
@@ -625,59 +630,8 @@ public:
   void forward(int qlen, int k, const uint64_t *expert_ids,
                const float *weights, const void *input, void *output,
                int *batch_size_tensor, Backend *backend) {
-    // Validate inputs
-    if (qlen <= 0 || batch_size_tensor == nullptr) {
-      printf("Warning: Invalid qlen (%d) or null batch_size_tensor, using safe "
-             "defaults\n",
-             qlen);
-      // Write zeros to output and return early
-      if (output != nullptr) {
-        memset(output, 0, qlen * config_.hidden_size * sizeof(ggml_bf16_t));
-      }
-      return;
-    }
-
-    // Get actual qlen from batch size tensor with validation
     qlen = batch_size_tensor[0];
-    if (qlen <= 0) {
-      printf("Warning: Invalid batch size %d, using 1\n", qlen);
-      qlen = 1;
-    }
-
-    // Validate qlen and k against configured limits
-    if (qlen > config_.max_len) {
-      printf("Error: qlen (%d) exceeds max_len (%d). Clamping to max_len.\n", qlen, config_.max_len);
-      qlen = config_.max_len;
-    }
-    
-    if (k > config_.routed_expert_num) {
-      printf("Error: k (%d) exceeds routed_expert_num (%d). Clamping to routed_expert_num.\n", k, config_.routed_expert_num);
-      k = config_.routed_expert_num;
-    }
-
     bool use_amx = (qlen > 4 * config_.expert_num / config_.routed_expert_num);
-
-    // Validate config
-    if (config_.expert_num <= 0) {
-      printf("Error: Invalid expert_num %d, must be > 0\n", config_.expert_num);
-      return;
-    }
-    
-    // Validate vector sizes
-    if (m_local_num_.size() != (size_t)config_.expert_num) {
-      printf("Error: m_local_num_ size %lu doesn't match expert_num %d\n", 
-             m_local_num_.size(), config_.expert_num);
-      // Try to resize
-      try {
-        m_local_num_.resize(config_.expert_num);
-        printf("Resized m_local_num_ to %d\n", config_.expert_num);
-      } catch (const std::exception& e) {
-        printf("Failed to resize m_local_num_: %s\n", e.what());
-        return;
-      }
-    }
-    
-    // Initialize and validate expert counts
     int activated_expert = 0;
     for (int i = 0; i < config_.expert_num; i++) {
       m_local_num_[i] = 0;
@@ -885,42 +839,38 @@ public:
                        up_bb_[expert_idx], up_bc_[expert_idx], ith, nth,
                        use_amx);
 #endif
-
-          // Continue with the rest of the processing
-          gate_bc_[expert_idx]->to_mat(m_local_num_[expert_idx],
-                                       m_local_gate_output_ptr_[expert_idx],
-                                       ith, nth);
-          up_bc_[expert_idx]->to_mat(m_local_num_[expert_idx],
-                                     m_local_up_output_ptr_[expert_idx], ith,
-                                     nth);
-          auto [n_start, n_end] =
-              T::split_range_n(config_.intermediate_size, ith, nth);
-
-          // Process activation functions
-          for (int i = 0; i < m_local_num_[expert_idx]; i++) {
-            ggml_bf16_t *gate_output_ptr =
-                &m_local_gate_output_ptr_[expert_idx]
-                                         [i * config_.intermediate_size];
-            ggml_bf16_t *up_output_ptr =
-                &m_local_up_output_ptr_[expert_idx]
-                                       [i * config_.intermediate_size];
-            for (int j = n_start; j < n_end; j += 32) {
-              // Bounds check
-              if (j + 32 > config_.intermediate_size) {
-                continue;
+          gate_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_gate_output_ptr_[expert_idx], ith, nth);
+          up_bc_[expert_idx]->to_mat(m_local_num_[expert_idx], m_local_up_output_ptr_[expert_idx], ith, nth);
+          auto [n_start, n_end] = T::split_range_n(config_.intermediate_size, ith, nth);
+          if (config_.use_silu) {
+            for (int i = 0; i < m_local_num_[expert_idx]; i++) {
+                ggml_bf16_t *gate_output_ptr = &m_local_gate_output_ptr_[expert_idx][i * config_.intermediate_size];
+                ggml_bf16_t *up_output_ptr = &m_local_up_output_ptr_[expert_idx][i * config_.intermediate_size];
+                for (int j = n_start; j < n_end; j += 32) {
+                  __m512 gate_val0, gate_val1, up_val0, up_val1;
+                  avx512_32xbf16_to_32xfp32((__m512i *)(gate_output_ptr + j), &gate_val0, &gate_val1);
+                  avx512_32xbf16_to_32xfp32((__m512i *)(up_output_ptr + j), &up_val0, &up_val1);
+                  __m512 result0 = act_fn(gate_val0, up_val0);
+                  __m512 result1 = act_fn(gate_val1, up_val1);
+                  avx512_32xfp32_to_32xbf16(&result0, &result1, (__m512i *)(gate_output_ptr + j));
+                }
               }
-
-              __m512 gate_val0, gate_val1, up_val0, up_val1;
-              avx512_32xbf16_to_32xfp32((__m512i *)(gate_output_ptr + j),
-                                        &gate_val0, &gate_val1);
-              avx512_32xbf16_to_32xfp32((__m512i *)(up_output_ptr + j),
-                                        &up_val0, &up_val1);
-              __m512 result0 = act_fn(gate_val0, up_val0);
-              __m512 result1 = act_fn(gate_val1, up_val1);
-              avx512_32xfp32_to_32xbf16(&result0, &result1,
-                                        (__m512i *)(gate_output_ptr + j));
-            }
           }
+          else {
+              for (int i = 0; i < m_local_num_[expert_idx]; i++) {
+                ggml_bf16_t *gate_output_ptr = &m_local_gate_output_ptr_[expert_idx][i * config_.intermediate_size];
+                ggml_bf16_t *up_output_ptr = &m_local_up_output_ptr_[expert_idx][i * config_.intermediate_size];
+                for (int j = n_start; j < n_end; j += 32) {
+                  __m512 gate_val0, gate_val1, up_val0, up_val1;
+                  avx512_32xbf16_to_32xfp32((__m512i *)(gate_output_ptr + j), &gate_val0, &gate_val1);
+                  avx512_32xbf16_to_32xfp32((__m512i *)(up_output_ptr + j), &up_val0, &up_val1);
+                  __m512 result0 = relu_act_fn(gate_val0, up_val0);
+                  __m512 result1 = relu_act_fn(gate_val1, up_val1);
+                  avx512_32xfp32_to_32xbf16(&result0, &result1, (__m512i *)(gate_output_ptr + j));
+                }
+              }
+          }
+          
         },
         nullptr);
 
@@ -1081,15 +1031,5 @@ public:
         nullptr);
   }
 };
-
-// Template specialization for GemmKernel224Int8 to ensure the load_weights
-// method uses from_mat_int8
-template <>
-inline void AMX_MOE<amx::GemmKernel224Int8>::load_weights(Backend *backend) {
-  // For the GemmKernel224Int8 specialization, we'll redirect to
-  // load_weights_int8 This ensures that from_mat_int8 is used instead of
-  // from_mat
-  this->load_weights_int8(backend);
-}
 
 #endif

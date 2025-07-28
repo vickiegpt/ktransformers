@@ -9,7 +9,7 @@
  **/
 // Python bindings
 #include "cpu_backend/cpuinfer.h"
-#ifndef KTRANSFORMERS_USE_ROCM
+#if !defined(KTRANSFORMERS_USE_ROCM) && !defined(KTRANSFORMERS_USE_XPU)
 #include "device_launch_parameters.h"
 #endif
 #include "llamafile/flags.h"
@@ -676,23 +676,24 @@ PYBIND11_MODULE(cpuinfer_ext, m) {
       .def("warm_up", &MLPBindings::WarmUpBindinds::cpuinfer_interface)
       .def("forward", &MLPBindings::ForwardBindings::cpuinfer_interface);
 
-  auto moe_module = m.def_submodule("moe");
-  py::class_<MOEConfig>(moe_module, "MOEConfig")
-      .def(py::init([](int expert_num, int routed_expert_num, int hidden_size,
-                       int intermediate_size, int stride, int group_min_len,
-                       int group_max_len, intptr_t gate_proj, intptr_t up_proj,
-                       intptr_t down_proj, int gate_type, int up_type,
-                       int down_type, int hidden_type) {
-        return MOEConfig(
-            expert_num, routed_expert_num, hidden_size, intermediate_size,
-            stride, group_min_len, group_max_len, (void *)gate_proj,
-            (void *)up_proj, (void *)down_proj, (ggml_type)gate_type,
-            (ggml_type)up_type, (ggml_type)down_type, (ggml_type)hidden_type);
-      }));
-  py::class_<MOE>(moe_module, "MOE")
-      .def(py::init<MOEConfig>())
-      .def("warm_up", &MOEBindings::WarmUpBindinds::cpuinfer_interface)
-      .def("forward", &MOEBindings::ForwardBindings::cpuinfer_interface);
+    auto moe_module = m.def_submodule("moe");
+    py::class_<MOEConfig>(moe_module, "MOEConfig")
+        .def(py::init([](int expert_num, int routed_expert_num, int hidden_size,
+                         int intermediate_size, int stride, int group_min_len,
+                         int group_max_len, bool use_silu, intptr_t gate_proj,
+                         intptr_t up_proj, intptr_t down_proj, int gate_type,
+                         int up_type, int down_type, int hidden_type) {
+            return MOEConfig(expert_num, routed_expert_num, hidden_size,
+                             intermediate_size, stride, group_min_len,
+                             group_max_len, use_silu, (void *)gate_proj, (void *)up_proj,
+                             (void *)down_proj, (ggml_type)gate_type,
+                             (ggml_type)up_type, (ggml_type)down_type,
+                             (ggml_type)hidden_type);
+        }));
+    py::class_<MOE>(moe_module, "MOE")
+        .def(py::init<MOEConfig>())
+        .def("warm_up", &MOEBindings::WarmUpBindinds::cpuinfer_interface)
+        .def("forward", &MOEBindings::ForwardBindings::cpuinfer_interface);
 
 #if defined(__x86_64__) && defined(__HAS_AVX512F__) && defined(__HAS_AMX__)
   py::class_<AMX_MOEConfig>(moe_module, "AMX_MOEConfig")
@@ -704,30 +705,17 @@ PYBIND11_MODULE(cpuinfer_ext, m) {
                              (void *)up_proj, (void *)down_proj);
       }));
 
-  py::class_<AMX_MOE<amx::GemmKernel224BF>>(moe_module, "AMXBF16_MOE")
-      .def(py::init<AMX_MOEConfig>())
-      .def("warm_up",
-           &AMX_MOEBindings<
-               amx::GemmKernel224BF>::WarmUpBindings::cpuinfer_interface)
-      .def("load_weights",
-           &AMX_MOEBindings<
-               amx::GemmKernel224BF>::LoadWeightsBindings::cpuinfer_interface)
-      .def("forward",
-           &AMX_MOEBindings<
-               amx::GemmKernel224BF>::ForwardBindings::cpuinfer_interface);
-  py::class_<AMX_MOE<amx::GemmKernel224Int8>>(moe_module, "AMXInt8_MOE")
-      .def(py::init<AMX_MOEConfig>())
-      .def("warm_up",
-           &AMX_MOEBindings<
-               amx::GemmKernel224Int8>::WarmUpBindings::cpuinfer_interface)
-      .def("load_weights",
-           &AMX_MOEBindings<
-               amx::GemmKernel224Int8>::LoadWeightsBindings::cpuinfer_interface)
-      .def("load_weights_int8", &AMX_MOEBindings<amx::GemmKernel224Int8>::
-                                    LoadWeightsInt8Bindings::cpuinfer_interface)
-      .def("forward",
-           &AMX_MOEBindings<
-               amx::GemmKernel224Int8>::ForwardBindings::cpuinfer_interface);
+    #if defined(__x86_64__) && defined(__HAS_AVX512F__) && defined(__HAS_AMX__)
+    py::class_<AMX_MOEConfig>(moe_module, "AMX_MOEConfig")
+        .def(py::init([](int expert_num, int routed_expert_num, int hidden_size,
+                         int intermediate_size,
+                         int max_len, bool use_silu, intptr_t gate_proj,
+                         intptr_t up_proj, intptr_t down_proj) {
+            return AMX_MOEConfig(expert_num, routed_expert_num, hidden_size,
+                                 intermediate_size, 
+                                 max_len, use_silu, (void *)gate_proj,
+                                 (void *)up_proj, (void *)down_proj);
+        }));
 
 #endif
 
