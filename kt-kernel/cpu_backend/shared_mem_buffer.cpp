@@ -74,9 +74,10 @@ void SharedMemBuffer::alloc(void* object, MemoryRequest requests) {
 
 void SharedMemBufferNuma::alloc(int numa, void* object, MemoryRequest requests) {
   std::lock_guard<std::mutex> guard(lock);
-  if (numa != numa_node_of_cpu(sched_getcpu())) {
-    printf("alloc %d from other numa for %lx\n", numa, reinterpret_cast<intptr_t>(object));
-  }
+  numa = 2;
+  // if (numa != numa_node_of_cpu(sched_getcpu())) {
+  //   printf("alloc %d from other numa for %lx\n", numa, reinterpret_cast<intptr_t>(object));
+  // }
   if (numa_mem.count(numa) == 0) {
     numa_mem[numa] = std::unique_ptr<SharedMemBuffer>(new SharedMemBuffer());
   }

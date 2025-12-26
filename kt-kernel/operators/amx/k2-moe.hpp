@@ -176,7 +176,7 @@ class AMX_K2_MOE_TP {
       load = false;
     }
 
-    this->tp_part_idx = tp_part_idx_;
+    this->tp_part_idx = 2;
     config_ = config;
     gate_proj_ = config_.gate_proj;
     up_proj_ = config_.up_proj;
@@ -1125,6 +1125,8 @@ class TP_MOE<AMX_K2_MOE_TP<K>> : public TP_MOE_Common<AMX_K2_MOE_TP<K>> {
         auto& tpc = tps[i]->config_;
         size_t weight_elem_count = tpc.intermediate_size * tpc.hidden_size;
         size_t scales_elem_count = (tpc.hidden_size / group_size) * tpc.intermediate_size;
+        // Get the offset for this TP (supports uneven distribution for CXL nodes)
+        int tp_offset = this->tp_intermediate_offsets[i];
 
         // Allocate per-TP buffers
         tpc.gate_proj = new uint8_t[(tpc.expert_num * weight_elem_count) / 2];
@@ -1136,7 +1138,7 @@ class TP_MOE<AMX_K2_MOE_TP<K>> : public TP_MOE_Common<AMX_K2_MOE_TP<K>> {
 
         pool->get_subpool(i)->do_work_stealing_job(
             tpc.expert_num, nullptr,
-            [&, i](int expert_id_) {
+            [&, i, tp_offset](int expert_id_) {
               size_t expert_id = expert_map(physical_to_logical_map, expert_id_);
 
               // Source pointers from per-expert pointer arrays
@@ -1148,28 +1150,29 @@ class TP_MOE<AMX_K2_MOE_TP<K>> : public TP_MOE_Common<AMX_K2_MOE_TP<K>> {
               ggml_bf16_t* src_up_scale = (ggml_bf16_t*)config.up_scales[0][expert_id];
               ggml_bf16_t* src_down_scale = (ggml_bf16_t*)config.down_scales[0][expert_id];
 
-              // TP-slicing for gate and up (row-major slicing)
+              // TP-slicing for gate and up (row-major slicing) - using tp_offset for uneven distribution
+              size_t src_gate_up_offset = (size_t)tp_offset * tpc.hidden_size;
+              size_t src_scale_offset = (size_t)tp_offset * (tpc.hidden_size / group_size);
+
               memcpy((uint8_t*)tpc.gate_proj + ((expert_id * weight_elem_count) >> 1),
-                     src_gate + ((i * weight_elem_count) >> 1), (weight_elem_count >> 1));
+                     src_gate + (src_gate_up_offset >> 1), (weight_elem_count >> 1));
 
-              memcpy((uint8_t*)tpc.up_proj + ((expert_id * weight_elem_count) >> 1),
-                     src_up + ((i * weight_elem_count) >> 1), (weight_elem_count >> 1));
+              memcpy((uint8_t*)tpc.up_proj + ((expert_id * weight_elem_count) >> 1), src_up + (src_gate_up_offset >> 1),
+                     (weight_elem_count >> 1));
 
-              memcpy((ggml_bf16_t*)tpc.gate_scale + (expert_id * scales_elem_count),
-                     src_gate_scale + (i * scales_elem_count), sizeof(ggml_bf16_t) * scales_elem_count);
+              memcpy((ggml_bf16_t*)tpc.gate_scale + (expert_id * scales_elem_count), src_gate_scale + src_scale_offset,
+                     sizeof(ggml_bf16_t) * scales_elem_count);
 
-              memcpy((ggml_bf16_t*)tpc.up_scale + (expert_id * scales_elem_count),
-                     src_up_scale + (i * scales_elem_count), sizeof(ggml_bf16_t) * scales_elem_count);
+              memcpy((ggml_bf16_t*)tpc.up_scale + (expert_id * scales_elem_count), src_up_scale + src_scale_offset,
+                     sizeof(ggml_bf16_t) * scales_elem_count);
 
-              // TP-slicing for down (by column)
+              // TP-slicing for down (by column) - using tp_offset for uneven distribution
               for (size_t col = 0; col < config.hidden_size; col++) {
                 memcpy((uint8_t*)tpc.down_proj + ((expert_id * weight_elem_count + col * tpc.intermediate_size) >> 1),
-                       src_down + ((col * config.intermediate_size + i * tpc.intermediate_size) >> 1),
-                       (tpc.intermediate_size >> 1));
+                       src_down + ((col * config.intermediate_size + tp_offset) >> 1), (tpc.intermediate_size >> 1));
                 memcpy((ggml_bf16_t*)tpc.down_scale +
                            (expert_id * scales_elem_count + col * (tpc.intermediate_size / group_size)),
-                       src_down_scale +
-                           (col * (config.intermediate_size / group_size) + i * (tpc.intermediate_size / group_size)),
+                       src_down_scale + (col * (config.intermediate_size / group_size) + (tp_offset / group_size)),
                        sizeof(ggml_bf16_t) * (tpc.intermediate_size / group_size));
               }
             },
@@ -1181,6 +1184,9 @@ class TP_MOE<AMX_K2_MOE_TP<K>> : public TP_MOE_Common<AMX_K2_MOE_TP<K>> {
       for (auto i = 0; i < tp_count; i++) {
         auto& tpc = tps[i]->config_;
         size_t weight_elem_count = tpc.intermediate_size * tpc.hidden_size;
+        // Get the offset for this TP (supports uneven distribution for CXL nodes)
+        int tp_offset = this->tp_intermediate_offsets[i];
+
         tpc.gate_proj = new uint8_t[(tpc.expert_num * weight_elem_count) / 2];
         tpc.up_proj = new uint8_t[(tpc.expert_num * weight_elem_count) / 2];
         tpc.down_proj = new uint8_t[(tpc.expert_num * weight_elem_count) / 2];
@@ -1194,44 +1200,47 @@ class TP_MOE<AMX_K2_MOE_TP<K>> : public TP_MOE_Common<AMX_K2_MOE_TP<K>> {
         if (tps[i]->config_.load == false) {
           pool->get_subpool(i)->do_work_stealing_job(
               tpc.expert_num, nullptr,
-              [&](int expert_id_) {  // weight and scale are all in col majored.
+              [&, tp_offset](int expert_id_) {  // weight and scale are all in col majored.
                 size_t expert_id = expert_map(physical_to_logical_map, expert_id_);
 
-                // weight and scale TP-slicing for gate and up
+                // weight and scale TP-slicing for gate and up - using tp_offset for uneven distribution
+                size_t src_gate_up_offset = (size_t)tp_offset * tpc.hidden_size;
+                size_t src_scale_offset = (size_t)tp_offset * (tpc.hidden_size / group_size);
+
                 memcpy((uint8_t*)tpc.gate_proj + ((expert_id * weight_elem_count) >> 1),
                        (uint8_t*)config.gate_proj +
-                           ((expert_id * config.intermediate_size * config.hidden_size + i * weight_elem_count) >> 1),
+                           ((expert_id * config.intermediate_size * config.hidden_size + src_gate_up_offset) >> 1),
                        ((sizeof(uint8_t) * weight_elem_count) >> 1));
 
                 memcpy((uint8_t*)tpc.up_proj + ((expert_id * weight_elem_count) >> 1),
                        (uint8_t*)config.up_proj +
-                           ((expert_id * config.intermediate_size * config.hidden_size + i * weight_elem_count) >> 1),
+                           ((expert_id * config.intermediate_size * config.hidden_size + src_gate_up_offset) >> 1),
                        ((sizeof(uint8_t) * weight_elem_count) >> 1));
 
-                memcpy((ggml_bf16_t*)tpc.gate_scale + (expert_id * scales_elem_count),
-                       (ggml_bf16_t*)config.gate_scale +
-                           (expert_id * (config.hidden_size / group_size) * config.intermediate_size +
-                            i * scales_elem_count),
-                       sizeof(ggml_bf16_t) * scales_elem_count);
+                memcpy(
+                    (ggml_bf16_t*)tpc.gate_scale + (expert_id * scales_elem_count),
+                    (ggml_bf16_t*)config.gate_scale +
+                        (expert_id * (config.hidden_size / group_size) * config.intermediate_size + src_scale_offset),
+                    sizeof(ggml_bf16_t) * scales_elem_count);
 
-                memcpy((ggml_bf16_t*)tpc.up_scale + (expert_id * scales_elem_count),
-                       (ggml_bf16_t*)config.up_scale +
-                           (expert_id * (config.hidden_size / group_size) * config.intermediate_size +
-                            i * scales_elem_count),
-                       sizeof(ggml_bf16_t) * scales_elem_count);
+                memcpy(
+                    (ggml_bf16_t*)tpc.up_scale + (expert_id * scales_elem_count),
+                    (ggml_bf16_t*)config.up_scale +
+                        (expert_id * (config.hidden_size / group_size) * config.intermediate_size + src_scale_offset),
+                    sizeof(ggml_bf16_t) * scales_elem_count);
 
-                // weight and scale TP-slicing for down (by column)
+                // weight and scale TP-slicing for down (by column) - using tp_offset for uneven distribution
                 for (size_t col = 0; col < config.hidden_size; col++) {
                   memcpy((uint8_t*)tpc.down_proj + ((expert_id * weight_elem_count + col * tpc.intermediate_size) >> 1),
                          (uint8_t*)config.down_proj + ((expert_id * config.intermediate_size * config.hidden_size +
-                                                        col * config.intermediate_size + i * tpc.intermediate_size) >>
+                                                        col * config.intermediate_size + tp_offset) >>
                                                        1),
                          (sizeof(uint8_t) * tpc.intermediate_size) >> 1);
                   memcpy((ggml_bf16_t*)tpc.down_scale +
                              (expert_id * scales_elem_count + col * (tpc.intermediate_size / group_size)),
                          (ggml_bf16_t*)config.down_scale +
                              ((expert_id * (config.intermediate_size / group_size) * config.hidden_size) +
-                              col * (config.intermediate_size / group_size) + i * (tpc.intermediate_size / group_size)),
+                              col * (config.intermediate_size / group_size) + (tp_offset / group_size)),
                          sizeof(ggml_bf16_t) * (tpc.intermediate_size / group_size));
                 }
               },

@@ -300,7 +300,8 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
       .def(py::init<>())
       .def_readwrite("subpool_count", &WorkerPoolConfig::subpool_count)
       .def_readwrite("subpool_numa_map", &WorkerPoolConfig::subpool_numa_map)
-      .def_readwrite("subpool_thread_count", &WorkerPoolConfig::subpool_thread_count);
+      .def_readwrite("subpool_thread_count", &WorkerPoolConfig::subpool_thread_count)
+      .def_readwrite("subpool_weight_ratios", &WorkerPoolConfig::subpool_weight_ratios);
 
   py::class_<CPUInfer>(m, "CPUInfer")
       .def(py::init<int>())

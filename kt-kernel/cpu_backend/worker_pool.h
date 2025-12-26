@@ -129,6 +129,8 @@ struct WorkerPoolConfig {
   int subpool_count;
   std::vector<int> subpool_numa_map;
   std::vector<int> subpool_thread_count;
+  std::vector<int>
+      subpool_weight_ratios;  // Weight ratios for TP distribution (e.g., [1, 1, 4] for numa0:numa1:numa2 = 1:1:4)
 };
 
 class WorkerPool {

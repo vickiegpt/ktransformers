@@ -87,14 +87,14 @@ void Backend::do_work_stealing_job(int task_num,
 
 void Backend::process_tasks(int thread_id) {
     
-    #ifdef USE_NUMA
-    if(numa_node == -1){
-        numa_node = thread_id * numa_num_configured_nodes() / thread_num_;
-        struct bitmask* mask = numa_bitmask_alloc(numa_num_configured_nodes());
-        numa_bitmask_setbit(mask, numa_node);
-        numa_bind(mask);
-    }
-    #endif
+    // #ifdef USE_NUMA
+    // if(numa_node == -1){
+    //     numa_node = thread_id * numa_num_configured_nodes() / thread_num_;
+    //     struct bitmask* mask = numa_bitmask_alloc(numa_num_configured_nodes());
+    //     numa_bitmask_setbit(mask, numa_node);
+    //     numa_bind(mask);
+    // }
+    // #endif
 
     if (init_func_ != nullptr) {
         init_func_(thread_id);

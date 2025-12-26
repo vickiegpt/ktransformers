@@ -39,13 +39,10 @@ InNumaPool::InNumaPool(int max_thread_num) {
 }
 
 InNumaPool::InNumaPool(int max_thread_num, int numa_id, int threads_id_start) {
-  printf("===========In NumaPool============\n");
-  hwloc_topology_t topology;
-  hwloc_obj_t numa_obj, core_obj;
-  hwloc_bitmap_t cpuset;
-  hwloc_topology_init(&topology);
-  hwloc_topology_load(topology);
-  printf("In Numa Worker Pool at NUMA %d, %d threads\n", numa_node_of_cpu(sched_getcpu()), max_thread_num);
+  // Initialize the pool with the same logic as the single-argument constructor
+  // The NUMA affinity binding code is commented out, but the pool still needs to work
+  printf("In Numa Worker Pool at NUMA %d, %d threads (numa_id=%d, start=%d)\n", numa_node_of_cpu(sched_getcpu()),
+         max_thread_num, numa_id, threads_id_start);
   total_worker_count = max_thread_num;
   set_restricted_worker_count(total_worker_count);
   thread_state_ = std::unique_ptr<ThreadState[]>(new ThreadState[max_thread_num]);
@@ -55,41 +52,6 @@ InNumaPool::InNumaPool(int max_thread_num, int numa_id, int threads_id_start) {
   workers_.resize(total_worker_count);
   for (int i = 1; i < total_worker_count; i++) {
     workers_[i] = std::thread(&InNumaPool::worker_thread, this, i, numa_id);
-    // set the thread name as: "numa_(numa_id)_t_(i+threads_id_start)"
-    std::string thread_name = "numa_" + std::to_string(numa_id) + "_t_" + std::to_string(i + threads_id_start);
-    pthread_t native_handle = workers_[i].native_handle();
-    auto res_set_name = pthread_setname_np(native_handle, thread_name.c_str());
-    if (res_set_name != 0) {
-      fprintf(stderr, "Failed to set thread name: %s\n", strerror(res_set_name));
-    }
-    // 检查线程是否成功命名
-    char name[16];
-    pthread_getname_np(native_handle, name, sizeof(name));
-    if (strcmp(name, thread_name.c_str()) == 0) {
-      // printf("Thread name set successfully: %s\n", name);
-    } else {
-      // printf("Failed to set thread name: %s\n", name);
-    }
-    // Set the thread affinity to the specified NUMA node's CPU
-    numa_obj = hwloc_get_obj_by_type(topology, HWLOC_OBJ_NUMANODE, numa_id);
-    if (!numa_obj) {
-      fprintf(stderr, "NUMA node %d not found\n", numa_id);
-      // throw std::runtime_error("NUMA node not found");
-      continue;
-    }
-    core_obj = hwloc_get_obj_inside_cpuset_by_type(topology, numa_obj->cpuset, HWLOC_OBJ_CORE, i + threads_id_start);
-    if (!core_obj) {
-      fprintf(stderr, "Core %d inside NUMA node %d not found\n", i, numa_id);
-      // throw std::runtime_error("Core not found inside NUMA node");
-      continue;
-    }
-    cpuset = hwloc_bitmap_alloc();
-    hwloc_bitmap_copy(cpuset, core_obj->cpuset);
-    hwloc_bitmap_singlify(cpuset);
-    auto res = hwloc_set_thread_cpubind(topology, native_handle, cpuset, HWLOC_CPUBIND_STRICT);
-    if (res != 0) {
-      fprintf(stderr, "Failed to set thread CPU binding: %s\n", strerror(errno));
-    }
   }
 }
 
@@ -396,7 +358,7 @@ void WorkerPool::init(WorkerPoolConfig config) {
     auto this_thread_count = config.subpool_thread_count[i];
     auto this_thread_id_start = numa_threads_count[this_numa];
     std::thread([this, i, this_numa, this_thread_count, this_thread_id_start]() {
-      set_to_numa(this_numa);
+      // set_to_numa(this_numa);
       numa_worker_pools[i] =
           std::move(std::unique_ptr<InNumaPool>(new InNumaPool(this_thread_count, this_numa, this_thread_id_start)));
       // numa_worker_pools[i] = std::move(std::unique_ptr<InNumaPool>(new InNumaPool(this_thread_count)));
@@ -423,7 +385,7 @@ WorkerPool::WorkerPool(int total_threads) {
 }
 
 WorkerPool::WorkerPool(int total_threads, int single_numa_id) {
-  set_to_numa(single_numa_id);
+  // set_to_numa(single_numa_id);
   config.subpool_count = numa_num_configured_nodes();
   config.subpool_numa_map.resize(config.subpool_count);
   config.subpool_thread_count.resize(config.subpool_count);

@@ -262,6 +262,8 @@ class AMX_MOE_TP {
     // shared_mem_buffer_numa.dealloc(this);
   }
   void load_weights() {
+    printf("    AMX_MOE_TP[%d]::load_weights() called, intermediate_size=%d\n", tp_part_idx, config_.intermediate_size);
+    fflush(stdout);
     auto pool = config_.pool->get_subpool(tp_part_idx);
     const uint64_t* physical_to_logical_map = (const uint64_t*)config_.physical_to_logical_map;
     if (config_.gate_projs.size()) {
@@ -339,6 +341,9 @@ class AMX_MOE_TP {
         if (tp_part_idx == 0) {
           std::cout << "  online quant from bf16" << std::endl;
         }
+        printf("    AMX_MOE_TP[%d]: starting gate/up quantization, nth=%d, expert_num=%d\n", tp_part_idx, nth,
+               config_.expert_num);
+        fflush(stdout);
         pool->do_work_stealing_job(
             nth * config_.expert_num, nullptr,
             [this, nth, physical_to_logical_map](int task_id) {
@@ -356,7 +361,12 @@ class AMX_MOE_TP {
             },
             nullptr);
 
+        printf("    AMX_MOE_TP[%d]: gate/up quantization done, starting down quantization\n", tp_part_idx);
+        fflush(stdout);
         nth = T::recommended_nth(config_.hidden_size);
+        printf("    AMX_MOE_TP[%d]: down quantization, nth=%d, hidden_size=%d\n", tp_part_idx, nth,
+               config_.hidden_size);
+        fflush(stdout);
         pool->do_work_stealing_job(
             nth * config_.expert_num, nullptr,
             [this, nth, physical_to_logical_map](int task_id) {
@@ -370,6 +380,8 @@ class AMX_MOE_TP {
               // printf("load idown, expert %ld, ith %d, total nth %d\n", expert_idx, ith, nth);
             },
             nullptr);
+        printf("    AMX_MOE_TP[%d]: down quantization done\n", tp_part_idx);
+        fflush(stdout);
       }
 #ifdef CHECK
       verify_load_right();
@@ -399,6 +411,8 @@ class AMX_MOE_TP {
             nullptr);
       }
     }
+    printf("    AMX_MOE_TP[%d]: load_weights() completed\n", tp_part_idx);
+    fflush(stdout);
   }
 
   void warm_up() {
@@ -841,39 +855,97 @@ class TP_MOE<AMX_MOE_TP<K>> : public TP_MOE_Common<AMX_MOE_TP<K>> {
       this->weights_loaded = true;
     } else if (config.gate_proj != nullptr) {
       printf("From BF16\n");
+      printf("  Source pointers: gate_proj=%p, up_proj=%p, down_proj=%p\n", (void*)config.gate_proj,
+             (void*)config.up_proj, (void*)config.down_proj);
+      printf("  Config: intermediate_size=%d, hidden_size=%d, expert_num=%d, tp_count=%d\n", config.intermediate_size,
+             config.hidden_size, config.expert_num, tp_count);
+      fflush(stdout);
       for (auto i = 0; i < tp_count; i++) {
         auto& tpc = tps[i]->config_;
         size_t gate_up_elcount = tpc.intermediate_size * tpc.hidden_size;
+        // Get the offset for this TP (supports uneven distribution for CXL nodes)
+        int tp_offset = this->tp_intermediate_offsets[i];
+        printf("  TP %d: intermediate_size=%d, hidden_size=%d, tp_offset=%d, gate_up_elcount=%zu\n", i,
+               tpc.intermediate_size, tpc.hidden_size, tp_offset, gate_up_elcount);
+
+        printf("  TP %d: allocating gate/up/down_proj buffers\n", i);
         tpc.gate_proj = new ggml_bf16_t[tpc.expert_num * gate_up_elcount];
         tpc.up_proj = new ggml_bf16_t[tpc.expert_num * gate_up_elcount];
         tpc.down_proj = new ggml_bf16_t[tpc.expert_num * gate_up_elcount];
+        printf("  TP %d: buffers allocated, starting memcpy\n", i);
+        fflush(stdout);
+        printf("  TP %d: checking config_.load=%d\n", i, (int)tps[i]->config_.load);
+        fflush(stdout);
         if (tps[i]->config_.load == false) {
-          pool->get_subpool(i)->do_work_stealing_job(
+          printf("  TP %d: getting subpool...\n", i);
+          fflush(stdout);
+          auto subpool = pool->get_subpool(i);
+          printf("  TP %d: got subpool=%p, calling do_work_stealing_job with expert_num=%d\n", i, (void*)subpool,
+                 tpc.expert_num);
+          fflush(stdout);
+          subpool->do_work_stealing_job(
               tpc.expert_num, nullptr,
-              [&](int expert_id_) {
+              [&, tp_offset, i](int expert_id_) {
+                if (expert_id_ == 0) {
+                  printf("    TP %d: processing expert_id_=%d\n", i, expert_id_);
+                  fflush(stdout);
+                }
                 size_t expert_id = expert_map(physical_to_logical_map, expert_id_);
+                if (expert_id_ == 0) {
+                  printf("    TP %d: expert_map returned expert_id=%zu\n", i, expert_id);
+                  fflush(stdout);
+                }
+                // Use tp_offset for uneven distribution support
+                size_t src_gate_up_offset = (size_t)tp_offset * tpc.hidden_size;
+                if (expert_id_ == 0) {
+                  printf("    TP %d: src_gate_up_offset=%zu\n", i, src_gate_up_offset);
+                  printf("    TP %d: gate_proj src=%p, dst=%p, size=%zu\n", i,
+                         (void*)((ggml_bf16_t*)config.gate_proj +
+                                 expert_id * config.intermediate_size * config.hidden_size + src_gate_up_offset),
+                         (void*)((ggml_bf16_t*)tpc.gate_proj + expert_id * gate_up_elcount),
+                         sizeof(ggml_bf16_t) * gate_up_elcount);
+                  fflush(stdout);
+                }
+
                 memcpy((ggml_bf16_t*)tpc.gate_proj + expert_id * gate_up_elcount,
                        (ggml_bf16_t*)config.gate_proj + expert_id * config.intermediate_size * config.hidden_size +
-                           i * gate_up_elcount,
+                           src_gate_up_offset,
                        sizeof(ggml_bf16_t) * gate_up_elcount);
+                if (expert_id_ == 0) {
+                  printf("    TP %d: gate_proj memcpy done\n", i);
+                  fflush(stdout);
+                }
                 memcpy((ggml_bf16_t*)tpc.up_proj + expert_id * gate_up_elcount,
                        (ggml_bf16_t*)config.up_proj + expert_id * config.intermediate_size * config.hidden_size +
-                           i * gate_up_elcount,
+                           src_gate_up_offset,
                        sizeof(ggml_bf16_t) * gate_up_elcount);
+                if (expert_id_ == 0) {
+                  printf("    TP %d: up_proj memcpy done\n", i);
+                  fflush(stdout);
+                }
                 for (size_t col = 0; col < config.hidden_size; col++) {
                   memcpy((ggml_bf16_t*)tpc.down_proj + expert_id * tpc.hidden_size * tpc.intermediate_size +
                              col * tpc.intermediate_size,
                          (ggml_bf16_t*)config.down_proj + expert_id * config.intermediate_size * config.hidden_size +
-                             col * config.intermediate_size + i * tpc.intermediate_size,
+                             col * config.intermediate_size + tp_offset,
                          sizeof(ggml_bf16_t) * tpc.intermediate_size);
+                }
+                if (expert_id_ == 0) {
+                  printf("    TP %d: down_proj memcpy done\n", i);
+                  fflush(stdout);
                 }
               },
               nullptr);
+          printf("  TP %d: memcpy completed\n", i);
+          fflush(stdout);
         }
       }
 
+      printf("All TPs memcpy done, starting DO_TPS_LOAD_WEIGHTS (online quantization)...\n");
+      fflush(stdout);
       // pool->dispense_backend()->do_numa_job([this, pool](int numa_id) { this->tps[numa_id]->load_weights(); });
       DO_TPS_LOAD_WEIGHTS(pool);
+      printf("DO_TPS_LOAD_WEIGHTS completed\n");
 
       for (auto i = 0; i < tp_count; i++) {
         auto& tpc = tps[i]->config_;

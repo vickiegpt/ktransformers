@@ -26,6 +26,7 @@ template <MOE_TP_PART T>
 class TP_MOE_Common : public MoE_Interface {
  protected:
   std::vector<GeneralMOEConfig> tp_configs;
+  std::vector<int> tp_intermediate_offsets;  // Starting offset for each TP's intermediate slice
   int tp_count;
   int me_numa_id;
   std::vector<std::unique_ptr<T>> tps;
@@ -45,6 +46,7 @@ class TP_MOE_Common : public MoE_Interface {
   TP_MOE_Common(GeneralMOEConfig config) : config(config) {
     printf("TP MOE layer %d, pool: 0x%lx, expert num: %d, num_experts_per_tok: %d\n", config.layer_idx,
            (intptr_t)config.pool, config.expert_num, config.num_experts_per_tok);
+    printf("intermediate_size %d, tp count %d\n", config.intermediate_size, config.pool->config.subpool_count);
     if (config.pool == nullptr) {
       printf("TP MOE layer %d, no worker pool\n", config.layer_idx);
       throw std::runtime_error("no worker pool");
@@ -52,12 +54,6 @@ class TP_MOE_Common : public MoE_Interface {
 
     this->config = config;
     tp_count = config.pool->config.subpool_count;
-    if (config.intermediate_size % tp_count != 0) {
-      printf("intermediate_size %d, tp count %d\n", config.intermediate_size, tp_count);
-      throw std::runtime_error(
-          "For TP, intermediate_size must be a "
-          "multiple of NUMA node count");
-    }
 
     // Check if this is Llamafile backend using compile-time type checking
     constexpr bool is_llamafile = std::is_same<T, LLAMA_MOE_TP>::value;
@@ -99,23 +95,96 @@ class TP_MOE_Common : public MoE_Interface {
         printf("  TP %d: intermediate_size=%d, offset=%d, blocks=%d\n", i, tp_config.intermediate_size, current_offset,
                num_blocks_for_this_tp);
 
+        tp_intermediate_offsets.push_back(current_offset);
         tp_configs.push_back(tp_config);
         current_offset += tp_config.intermediate_size;
       }
     } else {
-      // For non-Llamafile backends: use simple equal division
-      if (config.intermediate_size % tp_count != 0) {
-        printf("intermediate_size %d, tp count %d\n", config.intermediate_size, tp_count);
-        throw std::runtime_error(
-            "For TP, intermediate_size must be a "
-            "multiple of NUMA node count");
+      // For non-Llamafile backends (AMX): use K_STEP-aligned distribution to support CXL/arbitrary NUMA counts
+      // AMX BufferA requires k to be a multiple of K_STEP (64), BufferC requires n to be a multiple of N_STEP (32)
+      // Using K_STEP (64) as block size satisfies both constraints since 64 is a multiple of 32
+      constexpr int K_STEP = 64;
+
+      if (config.intermediate_size % K_STEP != 0) {
+        printf("intermediate_size %d must be divisible by K_STEP %d for AMX backend\n", config.intermediate_size,
+               K_STEP);
+        throw std::runtime_error("intermediate_size must be divisible by K_STEP (64) for AMX backend");
       }
 
+      int num_blocks = config.intermediate_size / K_STEP;
+
+      // Check if weight ratios are specified for weighted distribution
+      bool use_weighted = config.pool->config.subpool_weight_ratios.size() == (size_t)tp_count;
+      std::vector<int> blocks_per_tp(tp_count);
+
+      if (use_weighted) {
+        // Weighted distribution: distribute blocks according to weight ratios
+        int total_weight = 0;
+        for (int i = 0; i < tp_count; i++) {
+          total_weight += config.pool->config.subpool_weight_ratios[i];
+        }
+
+        printf("AMX TP splitting (weighted): intermediate_size=%d, tp_count=%d, K_STEP=%d\n", config.intermediate_size,
+               tp_count, K_STEP);
+        printf("  num_blocks=%d, total_weight=%d, weight_ratios=[", num_blocks, total_weight);
+        for (int i = 0; i < tp_count; i++) {
+          printf("%d%s", config.pool->config.subpool_weight_ratios[i], i < tp_count - 1 ? ":" : "]\n");
+        }
+
+        // Calculate blocks for each TP based on weight ratio
+        int assigned_blocks = 0;
+        for (int i = 0; i < tp_count; i++) {
+          if (i == tp_count - 1) {
+            // Last TP gets remaining blocks to ensure total matches
+            blocks_per_tp[i] = num_blocks - assigned_blocks;
+          } else {
+            // Calculate proportional blocks, rounded to nearest
+            blocks_per_tp[i] =
+                (num_blocks * config.pool->config.subpool_weight_ratios[i] + total_weight / 2) / total_weight;
+            // Ensure at least 1 block per TP
+            if (blocks_per_tp[i] < 1) blocks_per_tp[i] = 1;
+          }
+          assigned_blocks += blocks_per_tp[i];
+        }
+
+        // Verify last TP gets at least 1 block
+        if (blocks_per_tp[tp_count - 1] < 1) {
+          printf("ERROR: Not enough blocks (%d) to satisfy weight ratios for tp_count=%d\n", num_blocks, tp_count);
+          throw std::runtime_error("intermediate_size too small: cannot satisfy weight ratios");
+        }
+      } else {
+        // Even distribution: distribute blocks evenly with remainder to first TPs
+        int base_blocks = num_blocks / tp_count;
+        int extra_blocks = num_blocks % tp_count;
+
+        if (base_blocks == 0) {
+          printf("intermediate_size %d is too small for tp_count %d (num_blocks=%d)\n", config.intermediate_size,
+                 tp_count, num_blocks);
+          throw std::runtime_error("intermediate_size too small: cannot distribute blocks to all TP instances");
+        }
+
+        printf("AMX TP splitting (even): intermediate_size=%d, tp_count=%d, K_STEP=%d\n", config.intermediate_size,
+               tp_count, K_STEP);
+        printf("  num_blocks=%d, base_blocks=%d, extra_blocks=%d\n", num_blocks, base_blocks, extra_blocks);
+
+        for (int i = 0; i < tp_count; i++) {
+          blocks_per_tp[i] = base_blocks + (i < extra_blocks ? 1 : 0);
+        }
+      }
+
+      int current_offset = 0;
       for (auto i = 0; i < tp_count; i++) {
         tps.push_back(nullptr);
         GeneralMOEConfig tp_config = config;
-        tp_config.intermediate_size /= tp_count;
+
+        tp_config.intermediate_size = blocks_per_tp[i] * K_STEP;
+
+        printf("  TP %d: intermediate_size=%d, offset=%d, blocks=%d\n", i, tp_config.intermediate_size, current_offset,
+               blocks_per_tp[i]);
+
+        tp_intermediate_offsets.push_back(current_offset);
         tp_configs.push_back(tp_config);
+        current_offset += tp_config.intermediate_size;
       }
     }
 

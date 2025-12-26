@@ -91,8 +91,8 @@ void Backend::process_tasks(int thread_id) {
     if(numa_node == -1){
         numa_node = thread_id * numa_num_configured_nodes() / thread_num_;
         struct bitmask* mask = numa_bitmask_alloc(numa_num_configured_nodes());
-        numa_bitmask_setbit(mask, numa_node);
-        numa_bind(mask);
+        // numa_bitmask_setbit(mask, numa_node);
+        // numa_bind(mask);
     }
     #endif
 

@@ -94,6 +94,33 @@ class BaseMoEWrapper(ABC):
 
     _cpu_infer_instance = None
     _layer_has_pending_deferred: Dict[int, bool] = {}
+    _subpool_weight_ratios: Optional[List[int]] = None  # Weight ratios for TP distribution (e.g., [1, 1, 4])
+
+    @classmethod
+    def set_subpool_weight_ratios(cls, ratios: List[int]):
+        """
+        Set weight ratios for TP distribution across NUMA nodes.
+
+        This controls how intermediate_size is distributed across NUMA nodes.
+        For example, [1, 1, 4] means numa0:numa1:numa2 = 1:1:4, so numa2 (CXL)
+        will store 4x more weights than numa0 and numa1.
+
+        Must be called before any MoE layer is created.
+
+        Args:
+            ratios: List of integer weight ratios, one per NUMA node.
+                   Length must match threadpool_count.
+                   Example: [1, 1, 4] for 3 NUMA nodes with CXL on numa2
+
+        Example:
+            >>> BaseMoEWrapper.set_subpool_weight_ratios([1, 1, 4])  # numa0:numa1:numa2 = 1:1:4
+        """
+        cls._subpool_weight_ratios = ratios
+
+    @classmethod
+    def get_subpool_weight_ratios(cls) -> Optional[List[int]]:
+        """Get currently configured weight ratios."""
+        return cls._subpool_weight_ratios
 
     def __init__(
         self,
@@ -158,6 +185,23 @@ class BaseMoEWrapper(ABC):
             worker_config.subpool_count = threadpool_count
             worker_config.subpool_numa_map = subpool_numa_map
             worker_config.subpool_thread_count = subpool_thread_count
+
+            # Set weight ratios for TP distribution if configured
+            # Can also be set via environment variable: KT_SUBPOOL_WEIGHT_RATIOS=1:1:4
+            weight_ratios = BaseMoEWrapper._subpool_weight_ratios
+            if weight_ratios is None:
+                env_ratios = os.environ.get("KT_SUBPOOL_WEIGHT_RATIOS")
+                if env_ratios:
+                    weight_ratios = [int(x) for x in env_ratios.split(":")]
+            if weight_ratios is not None:
+                if len(weight_ratios) != threadpool_count:
+                    raise ValueError(
+                        f"subpool_weight_ratios length ({len(weight_ratios)}) must match "
+                        f"threadpool_count ({threadpool_count}). Got: {weight_ratios}"
+                    )
+                worker_config.subpool_weight_ratios = weight_ratios
+                print(f"Using weighted TP distribution: {':'.join(map(str, weight_ratios))}")
+
             BaseMoEWrapper._cpu_infer_instance = kt_kernel_ext.CPUInfer(worker_config)
 
         self.cpu_infer = BaseMoEWrapper._cpu_infer_instance
