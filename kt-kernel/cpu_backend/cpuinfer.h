@@ -33,7 +33,11 @@
 
 class CPUInfer {
  public:
-  CPUInfer(int thread_num) {
+  // Maximum number of async tasks that can be outstanding before sync
+  // Higher values allow more GPU-CPU pipelining but use more memory
+  static constexpr size_t DEFAULT_ASYNC_DEPTH = 4;
+
+  CPUInfer(int thread_num) : async_depth_(DEFAULT_ASYNC_DEPTH) {
     printf("CPUInfer[0x%lx]: Hello\n", (intptr_t)this);
     backend_ = new WorkerPool(thread_num);
     task_queue_ = new TaskQueue();
@@ -41,7 +45,7 @@ class CPUInfer {
       ggml_table_f32_f16[i] = GGML_COMPUTE_FP16_TO_FP32(i);
     }
   }
-  CPUInfer(int thread_num, int numa_id) {
+  CPUInfer(int thread_num, int numa_id) : async_depth_(DEFAULT_ASYNC_DEPTH) {
     printf("CPUInfer[0x%lx]: Hello\n", (intptr_t)this);
     backend_ = new WorkerPool(thread_num, numa_id);
     task_queue_ = new TaskQueue();
@@ -50,7 +54,7 @@ class CPUInfer {
     }
   }
 
-  CPUInfer(WorkerPoolConfig config) {
+  CPUInfer(WorkerPoolConfig config) : async_depth_(DEFAULT_ASYNC_DEPTH) {
     printf("CPUInfer[0x%lx]: Hello\n", (intptr_t)this);
     backend_ = new WorkerPool(config);
     task_queue_ = new TaskQueue();
@@ -113,10 +117,33 @@ class CPUInfer {
     cudaLaunchHostFunc((cudaStream_t)user_cuda_stream, (cudaHostFn_t)&sync_, (void*)args);
 #endif
   }
+
+  // Async depth-aware sync: only syncs if pending count exceeds async_depth
+  // This allows GPU to pipeline multiple layers before blocking
+  void sync_if_needed_with_cuda_stream(intptr_t user_cuda_stream) {
+#if defined(KTRANSFORMERS_USE_CUDA)
+    size_t pending = task_queue_->get_pending_count();
+    if (pending > async_depth_) {
+      // Only sync down to async_depth_, not 0, to maintain pipeline
+      sync_with_cuda_stream(user_cuda_stream, async_depth_);
+    }
 #endif
+  }
+#endif
+
+  // Set the async depth (max outstanding tasks before sync)
+  void set_async_depth(size_t depth) { async_depth_ = depth; }
+  size_t get_async_depth() const { return async_depth_; }
+
+  // Get current pending task count (non-blocking)
+  size_t get_pending_count() const { return task_queue_->get_pending_count(); }
+
  public:
   WorkerPool* backend_;
   TaskQueue* task_queue_;
+
+ private:
+  size_t async_depth_;
 };
 
 #endif

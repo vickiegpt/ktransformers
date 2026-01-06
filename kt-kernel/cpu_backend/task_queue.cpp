@@ -43,8 +43,14 @@ void TaskQueue::enqueue(std::function<void()> task) {
 }
 
 void TaskQueue::sync(size_t allow_n_pending) {
-  // Spin until the pending task count drops to the allowed threshold.
-  while (pending.load(std::memory_order_acquire) > allow_n_pending);
+  // Fast path: check without locking if already satisfied
+  if (pending.load(std::memory_order_acquire) <= allow_n_pending) {
+    return;
+  }
+
+  // Slow path: use condition variable to wait efficiently (saves CPU cycles for MoE computation)
+  std::unique_lock<std::mutex> lock(sync_mutex_);
+  sync_cv_.wait(lock, [this, allow_n_pending]() { return pending.load(std::memory_order_acquire) <= allow_n_pending; });
 }
 
 void TaskQueue::worker() {
@@ -58,7 +64,13 @@ void TaskQueue::worker() {
       delete curr;
       curr = next;
       head.store(curr, std::memory_order_release);
-      pending.fetch_sub(1, std::memory_order_acq_rel);
+      size_t old_pending = pending.fetch_sub(1, std::memory_order_acq_rel);
+
+      // Notify waiting sync() calls that pending count decreased
+      // Only notify if there might be waiters (pending was > 0)
+      if (old_pending > 0) {
+        sync_cv_.notify_all();
+      }
     }
   }
 }

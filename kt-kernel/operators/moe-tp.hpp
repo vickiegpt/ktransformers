@@ -100,15 +100,16 @@ class TP_MOE_Common : public MoE_Interface {
         current_offset += tp_config.intermediate_size;
       }
     } else {
-      // For non-Llamafile backends (AMX): use K_STEP-aligned distribution to support CXL/arbitrary NUMA counts
+      // For non-Llamafile backends (AMX): use B_K_STEP-aligned distribution to support CXL/arbitrary NUMA counts
       // AMX BufferA requires k to be a multiple of K_STEP (64), BufferC requires n to be a multiple of N_STEP (32)
-      // Using K_STEP (64) as block size satisfies both constraints since 64 is a multiple of 32
-      constexpr int K_STEP = 64;
+      // INT4 BufferB requires k to be a multiple of B_K_STEP (2*K_STEP = 128)
+      // Using 128 as block size satisfies all constraints (128 is multiple of 64 and 32)
+      constexpr int K_STEP = 128;  // B_K_STEP for INT4 compatibility
 
       if (config.intermediate_size % K_STEP != 0) {
-        printf("intermediate_size %d must be divisible by K_STEP %d for AMX backend\n", config.intermediate_size,
+        printf("intermediate_size %d must be divisible by B_K_STEP %d for AMX INT4 backend\n", config.intermediate_size,
                K_STEP);
-        throw std::runtime_error("intermediate_size must be divisible by K_STEP (64) for AMX backend");
+        throw std::runtime_error("intermediate_size must be divisible by B_K_STEP (128) for AMX INT4 backend");
       }
 
       int num_blocks = config.intermediate_size / K_STEP;
@@ -124,8 +125,8 @@ class TP_MOE_Common : public MoE_Interface {
           total_weight += config.pool->config.subpool_weight_ratios[i];
         }
 
-        printf("AMX TP splitting (weighted): intermediate_size=%d, tp_count=%d, K_STEP=%d\n", config.intermediate_size,
-               tp_count, K_STEP);
+        printf("AMX TP splitting (weighted): intermediate_size=%d, tp_count=%d, B_K_STEP=%d\n",
+               config.intermediate_size, tp_count, K_STEP);
         printf("  num_blocks=%d, total_weight=%d, weight_ratios=[", num_blocks, total_weight);
         for (int i = 0; i < tp_count; i++) {
           printf("%d%s", config.pool->config.subpool_weight_ratios[i], i < tp_count - 1 ? ":" : "]\n");
@@ -163,7 +164,7 @@ class TP_MOE_Common : public MoE_Interface {
           throw std::runtime_error("intermediate_size too small: cannot distribute blocks to all TP instances");
         }
 
-        printf("AMX TP splitting (even): intermediate_size=%d, tp_count=%d, K_STEP=%d\n", config.intermediate_size,
+        printf("AMX TP splitting (even): intermediate_size=%d, tp_count=%d, B_K_STEP=%d\n", config.intermediate_size,
                tp_count, K_STEP);
         printf("  num_blocks=%d, base_blocks=%d, extra_blocks=%d\n", num_blocks, base_blocks, extra_blocks);
 

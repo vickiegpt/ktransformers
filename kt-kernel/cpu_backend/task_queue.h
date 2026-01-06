@@ -27,6 +27,9 @@ class TaskQueue {
 
   void sync(size_t allow_n_pending);
 
+  // Non-blocking check of pending count
+  size_t get_pending_count() const { return pending.load(std::memory_order_acquire); }
+
  private:
   struct Node {
     std::function<void()> task;
@@ -40,6 +43,10 @@ class TaskQueue {
   std::atomic<bool> done;
   std::atomic<size_t> pending;
   std::thread workerThread;
+
+  // Condition variable for efficient sync waiting (replaces spin-wait)
+  std::mutex sync_mutex_;
+  std::condition_variable sync_cv_;
 
   void worker();
 };

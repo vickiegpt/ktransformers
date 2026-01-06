@@ -95,6 +95,8 @@ class BaseMoEWrapper(ABC):
     _cpu_infer_instance = None
     _layer_has_pending_deferred: Dict[int, bool] = {}
     _subpool_weight_ratios: Optional[List[int]] = None  # Weight ratios for TP distribution (e.g., [1, 1, 4])
+    _async_depth: int = 4  # Default async depth for GPU-CPU pipelining (higher = more pipelining)
+    _total_layers: int = 0  # Total number of MoE layers (set during initialization)
 
     @classmethod
     def set_subpool_weight_ratios(cls, ratios: List[int]):
@@ -121,6 +123,46 @@ class BaseMoEWrapper(ABC):
     def get_subpool_weight_ratios(cls) -> Optional[List[int]]:
         """Get currently configured weight ratios."""
         return cls._subpool_weight_ratios
+
+    @classmethod
+    def set_async_depth(cls, depth: int):
+        """
+        Set the async depth for GPU-CPU pipelining.
+
+        Higher values allow more MoE layers to have outstanding CPU work before
+        requiring synchronization, improving GPU utilization at the cost of
+        higher memory usage for intermediate buffers.
+
+        Must be called before any MoE layer is created, or call apply_async_depth()
+        after to apply to existing CPUInfer instance.
+
+        Args:
+            depth: Maximum number of outstanding CPU tasks before sync.
+                   Recommended: 2-8 depending on available memory.
+                   Default is 4.
+
+        Example:
+            >>> BaseMoEWrapper.set_async_depth(6)  # Allow 6 layers to pipeline
+        """
+        cls._async_depth = depth
+        # Apply to existing instance if available
+        if cls._cpu_infer_instance is not None:
+            cls._cpu_infer_instance.set_async_depth(depth)
+
+    @classmethod
+    def get_async_depth(cls) -> int:
+        """Get currently configured async depth."""
+        return cls._async_depth
+
+    @classmethod
+    def set_total_layers(cls, total_layers: int):
+        """
+        Set the total number of MoE layers for proper sync at end of model.
+
+        Args:
+            total_layers: Total number of MoE layers in the model
+        """
+        cls._total_layers = total_layers
 
     def __init__(
         self,
@@ -203,6 +245,9 @@ class BaseMoEWrapper(ABC):
                 print(f"Using weighted TP distribution: {':'.join(map(str, weight_ratios))}")
 
             BaseMoEWrapper._cpu_infer_instance = kt_kernel_ext.CPUInfer(worker_config)
+            # Apply async depth setting for GPU-CPU pipelining
+            BaseMoEWrapper._cpu_infer_instance.set_async_depth(BaseMoEWrapper._async_depth)
+            print(f"CPU inference engine initialized with async_depth={BaseMoEWrapper._async_depth}")
 
         self.cpu_infer = BaseMoEWrapper._cpu_infer_instance
 
@@ -348,13 +393,20 @@ class BaseMoEWrapper(ABC):
             )
             BaseMoEWrapper._layer_has_pending_deferred[self.layer_idx] = True
 
-    def sync_forward(self, hidden_states: torch.Tensor, cuda_stream) -> torch.Tensor:
+    def sync_forward(self, hidden_states: torch.Tensor, cuda_stream, force_sync: bool = False) -> torch.Tensor:
         """
         Synchronize and retrieve forward inference results.
+
+        Uses async depth-aware synchronization to allow GPU-CPU pipelining.
+        Only fully syncs if:
+        - This is the last MoE layer (layer_idx == total_layers - 1)
+        - force_sync is True
+        - Pending task count exceeds async_depth
 
         Args:
             hidden_states: Original input hidden states (for getting buffer)
             cuda_stream: CUDA stream for synchronization
+            force_sync: If True, always perform full sync regardless of async depth
 
         Returns:
             output_gpu: Output tensor on GPU
@@ -372,7 +424,20 @@ class BaseMoEWrapper(ABC):
 
         current_slot = self.layer_idx % KExpertsCPUBuffer.buffer_depth
         allow_pending = 1 if BaseMoEWrapper._layer_has_pending_deferred.get(self.layer_idx, False) else 0
-        self.cpu_infer.sync_with_cuda_stream(cuda_stream, allow_pending)
+
+        # Determine if we need full sync or can use async depth-aware sync
+        is_last_layer = (
+            BaseMoEWrapper._total_layers > 0 and self.layer_idx >= BaseMoEWrapper._total_layers - 1
+        )
+
+        if force_sync or is_last_layer:
+            # Full sync for last layer or when explicitly requested
+            self.cpu_infer.sync_with_cuda_stream(cuda_stream, allow_pending)
+        else:
+            # Async depth-aware sync: only sync if pending exceeds threshold
+            # This allows GPU to continue to next layer while CPU finishes previous layers
+            self.cpu_infer.sync_if_needed_with_cuda_stream(cuda_stream)
+
         output_gpu[current_slot].copy_(output_cpu[current_slot], non_blocking=True)
         return output_gpu[current_slot]
 

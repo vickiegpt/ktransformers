@@ -309,10 +309,17 @@ PYBIND11_MODULE(kt_kernel_ext, m) {
       .def("submit", &CPUInfer::submit)
       .def("sync", &CPUInfer::sync, py::arg("allow_n_pending") = 0)
       .def_readwrite("backend_", &CPUInfer::backend_)
+      // Async depth control for GPU-CPU pipelining
+      .def("set_async_depth", &CPUInfer::set_async_depth, py::arg("depth"),
+           "Set max outstanding tasks before sync (higher = more pipelining)")
+      .def("get_async_depth", &CPUInfer::get_async_depth, "Get current async depth setting")
+      .def("get_pending_count", &CPUInfer::get_pending_count, "Get current pending task count (non-blocking)")
 #ifndef KTRANSFORMERS_CPU_ONLY
       .def("sync_with_cuda_stream", &CPUInfer::sync_with_cuda_stream, py::arg("user_cuda_stream"),
            py::arg("allow_n_pending") = 0)
       .def("submit_with_cuda_stream", &CPUInfer::submit_with_cuda_stream)
+      .def("sync_if_needed_with_cuda_stream", &CPUInfer::sync_if_needed_with_cuda_stream, py::arg("user_cuda_stream"),
+           "Only sync if pending count exceeds async_depth (allows pipelining)")
 #endif
       ;
 

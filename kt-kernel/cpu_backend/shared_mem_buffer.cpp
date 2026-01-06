@@ -48,6 +48,21 @@ SharedMemBuffer::~SharedMemBuffer() {
 
 void SharedMemBuffer::alloc(void* object, MemoryRequest requests) {
   size_t total_size = requests.total_size();
+
+  // Debug: print request details
+  printf("SharedMemBuffer::alloc: total_size=%zu bytes (%.2f GB), num_requests=%zu\n", total_size, total_size / 1e9,
+         requests.sizes.size());
+  for (size_t i = 0; i < requests.sizes.size() && i < 10; i++) {
+    printf("  request[%zu]: %zu bytes\n", i, requests.sizes[i]);
+  }
+  if (requests.sizes.size() > 10) {
+    printf("  ... and %zu more requests\n", requests.sizes.size() - 10);
+  }
+  fflush(stdout);
+
+  // Clear old requests to avoid accumulation across layers
+  // Each MOE layer is independent and doesn't need to share buffer with previous layers
+  object_requests.clear();
   object_requests.push_back(requests);
 
   if (total_size > size) {
@@ -64,17 +79,12 @@ void SharedMemBuffer::alloc(void* object, MemoryRequest requests) {
     }
     buffer = newbuf;
     size = total_size;
-    for (auto& req : object_requests) {
-      req.update_base_ptr(buffer);
-    }
-  } else {
-    requests.update_base_ptr(buffer);
   }
+  requests.update_base_ptr(buffer);
 }
 
 void SharedMemBufferNuma::alloc(int numa, void* object, MemoryRequest requests) {
   std::lock_guard<std::mutex> guard(lock);
-  numa = 2;
   // if (numa != numa_node_of_cpu(sched_getcpu())) {
   //   printf("alloc %d from other numa for %lx\n", numa, reinterpret_cast<intptr_t>(object));
   // }

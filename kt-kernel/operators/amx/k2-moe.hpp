@@ -176,7 +176,7 @@ class AMX_K2_MOE_TP {
       load = false;
     }
 
-    this->tp_part_idx = 2;
+    this->tp_part_idx = tp_part_idx_;
     config_ = config;
     gate_proj_ = config_.gate_proj;
     up_proj_ = config_.up_proj;

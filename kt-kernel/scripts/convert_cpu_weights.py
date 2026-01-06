@@ -766,8 +766,9 @@ class OnlineQuantConverter(ConverterBase):
             I = twoI // 2
 
             gate_up_T = gate_up_fused.transpose(1, 2).contiguous()  # [E, 2I, H]
-            gate_proj = gate_up_T[:, :I, :]  # [E, I, H]
-            up_proj = gate_up_T[:, I:, :]  # [E, I, H]
+            gate_proj = gate_up_T[:, :I, :].contiguous()  # [E, I, H] - must be contiguous for C++
+            up_proj = gate_up_T[:, I:, :].contiguous()  # [E, I, H] - must be contiguous for C++
+            del gate_up_T  # Free the intermediate tensor
 
             if down_fused.dim() != 3:
                 raise ValueError(f"[Fused] Expect down fused tensor to be 3D, got shape {tuple(down_fused.shape)}")
@@ -887,6 +888,7 @@ class OnlineQuantConverter(ConverterBase):
 
         # Clean up to free memory
         del gate_proj, up_proj, down_proj
+        del wrapper  # Free C++ MOE object and its allocated expert buffers
         gc.collect()
 
         elapsed = time.time() - start_time

@@ -259,6 +259,18 @@ class AMX_MOE_TP {
   }
 
   ~AMX_MOE_TP() {
+    // Free the aligned memory allocated for expert weight buffers
+    for (size_t i = 0; i < gate_bb_.size(); i++) {
+      if (gate_bb_[i] && gate_bb_[i]->b) {
+        std::free(gate_bb_[i]->b);
+      }
+      if (up_bb_[i] && up_bb_[i]->b) {
+        std::free(up_bb_[i]->b);
+      }
+      if (down_bb_[i] && down_bb_[i]->b) {
+        std::free(down_bb_[i]->b);
+      }
+    }
     // shared_mem_buffer_numa.dealloc(this);
   }
   void load_weights() {
@@ -886,43 +898,32 @@ class TP_MOE<AMX_MOE_TP<K>> : public TP_MOE_Common<AMX_MOE_TP<K>> {
           subpool->do_work_stealing_job(
               tpc.expert_num, nullptr,
               [&, tp_offset, i](int expert_id_) {
-                if (expert_id_ == 0) {
-                  printf("    TP %d: processing expert_id_=%d\n", i, expert_id_);
-                  fflush(stdout);
-                }
+                // Print progress for every expert to find crash point
+                printf("    TP %d: expert %d start, tp_offset=%d\n", i, expert_id_, tp_offset);
+                fflush(stdout);
+
                 size_t expert_id = expert_map(physical_to_logical_map, expert_id_);
-                if (expert_id_ == 0) {
-                  printf("    TP %d: expert_map returned expert_id=%zu\n", i, expert_id);
-                  fflush(stdout);
-                }
+
                 // Use tp_offset for uneven distribution support
                 size_t src_gate_up_offset = (size_t)tp_offset * tpc.hidden_size;
-                if (expert_id_ == 0) {
-                  printf("    TP %d: src_gate_up_offset=%zu\n", i, src_gate_up_offset);
-                  printf("    TP %d: gate_proj src=%p, dst=%p, size=%zu\n", i,
-                         (void*)((ggml_bf16_t*)config.gate_proj +
-                                 expert_id * config.intermediate_size * config.hidden_size + src_gate_up_offset),
-                         (void*)((ggml_bf16_t*)tpc.gate_proj + expert_id * gate_up_elcount),
-                         sizeof(ggml_bf16_t) * gate_up_elcount);
-                  fflush(stdout);
-                }
 
-                memcpy((ggml_bf16_t*)tpc.gate_proj + expert_id * gate_up_elcount,
-                       (ggml_bf16_t*)config.gate_proj + expert_id * config.intermediate_size * config.hidden_size +
-                           src_gate_up_offset,
+                // Debug: print source and dest addresses
+                size_t gate_src_offset = expert_id * config.intermediate_size * config.hidden_size + src_gate_up_offset;
+                size_t gate_dst_offset = expert_id * gate_up_elcount;
+                printf("      gate: src_off=%zu, dst_off=%zu, copy_size=%zu\n", gate_src_offset, gate_dst_offset,
+                       gate_up_elcount);
+                fflush(stdout);
+
+                memcpy((ggml_bf16_t*)tpc.gate_proj + gate_dst_offset, (ggml_bf16_t*)config.gate_proj + gate_src_offset,
                        sizeof(ggml_bf16_t) * gate_up_elcount);
-                if (expert_id_ == 0) {
-                  printf("    TP %d: gate_proj memcpy done\n", i);
-                  fflush(stdout);
-                }
-                memcpy((ggml_bf16_t*)tpc.up_proj + expert_id * gate_up_elcount,
-                       (ggml_bf16_t*)config.up_proj + expert_id * config.intermediate_size * config.hidden_size +
-                           src_gate_up_offset,
+                printf("      gate done\n");
+                fflush(stdout);
+
+                memcpy((ggml_bf16_t*)tpc.up_proj + gate_dst_offset, (ggml_bf16_t*)config.up_proj + gate_src_offset,
                        sizeof(ggml_bf16_t) * gate_up_elcount);
-                if (expert_id_ == 0) {
-                  printf("    TP %d: up_proj memcpy done\n", i);
-                  fflush(stdout);
-                }
+                printf("      up done\n");
+                fflush(stdout);
+
                 for (size_t col = 0; col < config.hidden_size; col++) {
                   memcpy((ggml_bf16_t*)tpc.down_proj + expert_id * tpc.hidden_size * tpc.intermediate_size +
                              col * tpc.intermediate_size,
@@ -930,10 +931,8 @@ class TP_MOE<AMX_MOE_TP<K>> : public TP_MOE_Common<AMX_MOE_TP<K>> {
                              col * config.intermediate_size + tp_offset,
                          sizeof(ggml_bf16_t) * tpc.intermediate_size);
                 }
-                if (expert_id_ == 0) {
-                  printf("    TP %d: down_proj memcpy done\n", i);
-                  fflush(stdout);
-                }
+                printf("      down done, expert %d complete\n", expert_id_);
+                fflush(stdout);
               },
               nullptr);
           printf("  TP %d: memcpy completed\n", i);
